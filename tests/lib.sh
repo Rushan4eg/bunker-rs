@@ -13,6 +13,15 @@
 # Портативный jq для Windows кладём куда угодно и указываем через JQ=
 JQ="${JQ:-jq}"
 
+# Windows: слой MSYS переписывает аргументы, похожие на пути, когда shell
+# зовёт нативную программу - "/dns-query" превращается в
+# "C:/Program Files/Git/dns-query". Тесты, проверяющие пути внутри конфига,
+# из-за этого врали. На линуксе переменные ни на что не влияют, поэтому
+# ставим их здесь для всего набора, а не в каждом файле по отдельности.
+MSYS_NO_PATHCONV=1
+MSYS2_ARG_CONV_EXCL='*'
+export MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
+
 TESTS_RUN=0
 TESTS_FAILED=0
 CURRENT_TEST=""

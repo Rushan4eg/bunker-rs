@@ -8,6 +8,23 @@
 # shellcheck shell=sh
 set -e
 
+# Windows: слой MSYS переписывает аргументы, похожие на пути, когда shell
+# зовёт нативную программу - "/dns-query" превращается в
+# "C:/Program Files/Git/dns-query", и проверки путей внутри конфига врут.
+#
+# Отключается это переменными, но читает их MSYS при ЗАПУСКЕ процесса, а не
+# при каждом вызове дочерней программы. Поэтому обычный export внутри скрипта
+# уже поздно - надо перезапустить себя, чтобы переменные были в окружении с
+# самого начала. Делаем это один раз и только под Windows; на линуксе, где
+# гоняется CI и живёт роутер, ветка не выполняется вовсе.
+if [ -z "$PODKOP_TESTS_REEXEC" ] && [ -n "$WINDIR" ]; then
+	PODKOP_TESTS_REEXEC=1
+	MSYS_NO_PATHCONV=1
+	MSYS2_ARG_CONV_EXCL='*'
+	export PODKOP_TESTS_REEXEC MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
+	exec "${PODKOP_TESTS_SHELL:-sh}" "$0" "$@"
+fi
+
 DIR=$(cd "$(dirname "$0")" && pwd)
 FILTER="${1:-}"
 JQ="${JQ:-jq}"
