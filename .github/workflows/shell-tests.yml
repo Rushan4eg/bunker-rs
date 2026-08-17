@@ -1,0 +1,75 @@
+name: Shell tests
+
+# Юнит-тесты shell-модулей подкопа и статический разбор под ash.
+#
+# С существующими workflow не пересекается: Differential ShellCheck смотрит
+# только диф в PR к main и rc/**, здесь же весь набор файлов целиком и на
+# любой ветке - иначе на feature/clash-core проверок не было бы вовсе.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shell-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell-tests:
+    name: Тесты и ShellCheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5.0.0
+
+      - name: Установка jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          jq --version
+
+      - name: Установка shellcheck
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+        run: |
+          # Не из apt: в ubuntu-24.04 там 0.9.0, а диалект busybox появился
+          # только в 0.10. Версия зафиксирована, чтобы новые проверки в свежем
+          # релизе не красили CI без единой правки в коде.
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | tar -xJ
+          sudo install -m 0755 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          shellcheck --version
+
+      - name: Юнит-тесты
+        # jq системный, переменная JQ нужна только на Windows
+        run: sh tests/run.sh
+
+      - name: Юнит-тесты под busybox ash
+        # На роутере /bin/sh - это ash из busybox, а на ubuntu - dash, и они
+        # расходятся: busybox понимает printf '%b' '\x2F' и [[ ]], dash нет.
+        # Прогон под busybox показывает, что код заведётся именно на роутере.
+        # Подменяется не /bin/sh, а PATH: run.sh зовёт каждый файл через `sh`.
+        if: always()
+        run: |
+          sudo apt-get install -y busybox
+          mkdir -p "$RUNNER_TEMP/ashbin"
+          ln -sf /bin/busybox "$RUNNER_TEMP/ashbin/sh"
+          PATH="$RUNNER_TEMP/ashbin:$PATH" sh tests/run.sh
+
+      - name: ShellCheck под ash
+        if: always()
+        run: |
+          # Диалект busybox - это и есть ash из OpenWrt со всеми его
+          # расширениями. sh ругался бы на [[ ]], которые на роутере работают,
+          # bash пропустил бы то, что там не заведётся.
+          #
+          # Исключения - долг, унаследованный от апстрима в helpers.sh:
+          #   SC3015 - [[ =~ ]], SC2330 - глоб в [[ ]], SC3028 - $RANDOM
+          # Новый код их не использует, а чинить helpers.sh - отдельная задача,
+          # ронять на ней CI смысла нет.
+          shellcheck --shell=busybox --severity=error \
+            --exclude=SC3015,SC2330,SC3028 \
+            podkop/files/usr/lib/*.sh tests/*.sh

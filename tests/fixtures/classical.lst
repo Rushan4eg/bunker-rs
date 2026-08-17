@@ -1,0 +1,7 @@
+# Уже готовые правила, как в Russia/inside-clashx.lst
+DOMAIN-SUFFIX,10minutemail.com
+DOMAIN-SUFFIX,.ua
+IP-CIDR,91.108.4.0/22
+DOMAIN,exact.example.com
+DOMAIN-KEYWORD,rutracker
+DOMAIN-SUFFIX,with-target.example.com,PROXY

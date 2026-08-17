@@ -1,0 +1,10 @@
+# Домены itdoginfo: комментарии, пустые строки, ведущая точка
+# вторая строка комментария
+
+.ua
+4pda.to
+habr.com
+   spaced.example.com   
+youtube.com // хвост в стиле C
+*.wildcard.example
+24.kg
