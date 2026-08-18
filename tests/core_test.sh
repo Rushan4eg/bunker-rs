@@ -22,7 +22,7 @@ uci() {
 	# нас интересует только `uci -q get podkop.settings.<key>`
 	case "$*" in
 	*podkop.settings.core*) cat "$UCI_CORE_FILE" ;;
-	*podkop.settings.sing_box_config_path*) cat "$TMP/uci_path" 2>/dev/null ;;
+	*podkop.settings.config_path*) cat "$TMP/uci_path" 2>/dev/null ;;
 	*) return 1 ;;
 	esac
 }
@@ -114,25 +114,37 @@ assert_eq "/tmp/clash-rs/rulesets" "$(core_ruleset_folder)"
 
 # ============================ путь конфига ==================================
 
-it "sing-box, flash по умолчанию"
+# Опция хранит ПОЛНЫЙ путь, а не режим: в UI выбор называется Flash или RAM,
+# наружу уходит "/etc/sing-box/config.json" либо "/tmp/sing-box/config.json".
+it "sing-box без настройки берёт путь по умолчанию"
 set_core "sing-box"
 set_path_mode ""
 assert_eq "/etc/sing-box/config.json" "$(core_config_path)"
 
-it "sing-box, режим ram"
+it "sing-box отдаёт заданный путь как есть"
 set_core "sing-box"
-set_path_mode "ram"
+set_path_mode "/tmp/sing-box/config.json"
 assert_eq "/tmp/sing-box/config.json" "$(core_config_path)"
 
-it "clash-rs, flash по умолчанию"
+it "sing-box не переписывает нестандартный путь"
+set_core "sing-box"
+set_path_mode "/srv/my/config.json"
+assert_eq "/srv/my/config.json" "$(core_config_path)"
+
+it "clash-rs без настройки кладёт конфиг на флеш"
 set_core "clash-rs"
 set_path_mode ""
 assert_eq "/etc/clash-rs/config.json" "$(core_config_path)"
 
-it "clash-rs, режим ram"
+it "clash-rs наследует намерение не изнашивать флеш"
 set_core "clash-rs"
-set_path_mode "ram"
+set_path_mode "/tmp/sing-box/config.json"
 assert_eq "/tmp/clash-rs/config.json" "$(core_config_path)"
+
+it "clash-rs при пути на флеше остаётся на флеше"
+set_core "clash-rs"
+set_path_mode "/etc/sing-box/config.json"
+assert_eq "/etc/clash-rs/config.json" "$(core_config_path)"
 
 # ============================ сервис ========================================
 

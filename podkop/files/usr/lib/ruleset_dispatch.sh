@@ -77,13 +77,24 @@ ruleset_community_url() {
 #######################################
 ruleset_add_community() {
 	local config="$1" service="$2" rule_tag="$3" interval="${4:-1d}" detour="$5"
+	local provider
 	local url name
 
 	if core_is_clash; then
-		name=$(clash_rs_provider_name "$service")
-		url=$(ruleset_community_url "$service" "domains") || return 1
-		config=$(clash_cm_add_http_rule_provider "$config" "$name" "domain" "text" \
-			"$url" "$(clash_rs_interval_to_seconds "$interval")")
+		name=$(clash_rs_provider_name "community" "$service")
+
+		# Список качаем и готовим сами, а не отдаём ядру ссылку на сырой файл.
+		# Причина не в удобстве: в списках itdoginfo домены записаны голыми
+		# ("4pda.to"), а у Clash голый домен в behavior=domain - это ТОЧНОЕ
+		# совпадение, тогда как sing-box матчил его как суффикс. Отдай мы
+		# сырой список - "www.4pda.to" перестал бы попадать в туннель, причём
+		# молча. clash_rs_prepare_community_list дописывает "+." и отдаёт
+		# готовое описание провайдера.
+		provider=$(clash_rs_prepare_community_list "$service" "domains" \
+			"$(ruleset_folder)") || return 1
+
+		config=$(clash_cm_add_raw_rule_provider "$config" "$name" "$provider") ||
+			return 1
 		config=$(clash_cm_add_ruleset_rule "$config" "$name" "$rule_tag")
 		printf '%s' "$config"
 		return 0

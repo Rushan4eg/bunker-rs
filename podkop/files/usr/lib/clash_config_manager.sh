@@ -1026,6 +1026,38 @@ clash_cm_add_http_rule_provider() {
 # Example:
 #   CONFIG=$(clash_cm_add_file_rule_provider "$CONFIG" "local-domains" "domain" "text" "/tmp/podkop/local.lst")
 #######################################
+#######################################
+# Положить в rule-providers готовое описание провайдера, как есть.
+#
+# Нужно там, где описание собирает не менеджер, а слой списков: он скачивает
+# файл, определяет behavior по содержимому и возвращает готовый объект. Дублировать
+# это определение здесь значило бы держать две расходящиеся копии логики.
+#
+# Arguments:
+#   config:   string (JSON), конфигурация Clash
+#   name:     string, ключ в rule-providers
+#   provider: string (JSON), объект провайдера целиком
+# Outputs:
+#   Пишет изменённую конфигурацию в stdout
+# Returns:
+#   1 если provider не разбирается как JSON - молча подставлять мусор в
+#   конфиг нельзя, ядро потом откажется стартовать без внятной причины
+# Example:
+#   CONFIG=$(clash_cm_add_raw_rule_provider "$CONFIG" "telegram" "$PROVIDER_JSON")
+#######################################
+clash_cm_add_raw_rule_provider() {
+	local config="$1"
+	local name="$2"
+	local provider="$3"
+
+	printf '%s' "$provider" | jq -e . >/dev/null 2>&1 || return 1
+
+	echo "$config" | jq \
+		--arg name "$name" \
+		--argjson provider "$provider" \
+		'.["rule-providers"] += {($name): $provider}'
+}
+
 clash_cm_add_file_rule_provider() {
     local config="$1"
     local name="$2"

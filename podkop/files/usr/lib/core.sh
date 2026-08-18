@@ -86,24 +86,32 @@ core_ruleset_folder() { printf '%s/rulesets' "$(core_tmp_folder)"; }
 
 #######################################
 # Путь к файлу конфига.
-# Учитывает podkop.settings.sing_box_config_path (flash или ram), который уже
-# есть в UI. Для clash-rs та же развилка, только имя файла другое.
+#
+# Опция podkop.settings.config_path хранит ПОЛНЫЙ путь, а не режим: в UI
+# выбор называется Flash или RAM, но наружу отдаётся
+# "/etc/sing-box/config.json" либо "/tmp/sing-box/config.json". Первая
+# редакция этой функции читала несуществующее имя sing_box_config_path и
+# сравнивала значение со строкой "ram" - выбор пользователя игнорировался
+# обоими ядрами молча.
+#
+# Для sing-box отдаём путь как есть. Для clash-rs подставляем свой файл, но
+# сохраняем намерение пользователя: путь во временной файловой системе
+# означает "не изнашивать флеш", и это намерение к ядру отношения не имеет.
 #######################################
 core_config_path() {
-	local mode
-	mode=$(uci -q get podkop.settings.sing_box_config_path 2>/dev/null)
+	local path
+	path=$(uci -q get podkop.settings.config_path 2>/dev/null)
 
-	if core_is_clash; then
-		case "$mode" in
-		ram) printf '/tmp/clash-rs/config.json' ;;
-		*) printf '/etc/clash-rs/config.json' ;;
-		esac
-	else
-		case "$mode" in
-		ram) printf '/tmp/sing-box/config.json' ;;
-		*) printf '/etc/sing-box/config.json' ;;
-		esac
+	if ! core_is_clash; then
+		[ -n "$path" ] || path="/etc/sing-box/config.json"
+		printf '%s' "$path"
+		return 0
 	fi
+
+	case "$path" in
+	/tmp/*) printf '/tmp/clash-rs/config.json' ;;
+	*) printf '/etc/clash-rs/config.json' ;;
+	esac
 }
 
 ## --- состояние -------------------------------------------------------------

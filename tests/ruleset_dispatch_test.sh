@@ -43,7 +43,14 @@ clash_rs_list_url() {
 	esac
 	printf 'https://example.invalid/raw/%s/%s.lst' "$2" "$1"
 }
-clash_rs_provider_name() { printf 'community_%s' "$1"; }
+clash_rs_provider_name() { printf '%s-%s-provider' "$1" "$2"; }
+clash_rs_prepare_community_list() {
+	log_call "clash_rs_prepare_community_list сервис=$1 вид=$2 каталог=$3"
+	case "$1" in
+	нетакого) return 1 ;;
+	esac
+	printf '{"type":"file","behavior":"domain","format":"yaml","path":"%s/%s-domains.lst"}' "$3" "$1"
+}
 clash_rs_interval_to_seconds() {
 	case "$1" in
 	1d) printf '86400' ;;
@@ -51,8 +58,12 @@ clash_rs_interval_to_seconds() {
 	*) printf '86400' ;;
 	esac
 }
-clash_cm_add_http_rule_provider() {
-	log_call "clash_cm_add_http_rule_provider имя=$2 behavior=$3 format=$4 url=$5 interval=$6"
+# Сигнатура повторяет НАСТОЯЩУЮ у менеджера: name, behavior, format, url,
+# path, interval. Прежняя заглушка читала интервал шестым аргументом - то
+# есть повторяла ошибку вызывающего кода, и тест её не ловил. Заглушка
+# должна следовать контракту, а не реализации.
+clash_cm_add_raw_rule_provider() {
+	log_call "clash_cm_add_raw_rule_provider имя=$2 описание=$3"
 	printf '%s' "$1"
 }
 clash_cm_add_ruleset_rule() {
@@ -156,19 +167,35 @@ it "clash-rs: заводится провайдер правил"
 set_core "clash-rs"
 reset_calls
 ruleset_add_community '{}' telegram "main" "1d" "" >/dev/null
-assert_contains "clash_cm_add_http_rule_provider имя=community_telegram behavior=domain format=text" "$(calls)"
+assert_contains "clash_cm_add_raw_rule_provider имя=community-telegram-provider" "$(calls)"
 
-it "clash-rs: интервал переводится в секунды"
+# Ключевое: список готовится нами, а не отдаётся ядру сырой ссылкой. В
+# списках itdoginfo домены голые, а у Clash голый домен в behavior=domain -
+# точное совпадение, тогда как sing-box матчил суффиксом. Отдай мы сырое -
+# "www.4pda.to" молча перестал бы попадать в туннель.
+it "clash-rs: список готовится через prepare, а не отдаётся ядру ссылкой"
 set_core "clash-rs"
 reset_calls
 ruleset_add_community '{}' telegram "main" "1d" "" >/dev/null
-assert_contains "interval=86400" "$(calls)"
+assert_contains "clash_rs_prepare_community_list сервис=telegram вид=domains" "$(calls)"
+
+it "clash-rs: готовится в каталог активного ядра"
+set_core "clash-rs"
+reset_calls
+ruleset_add_community '{}' telegram "main" "1d" "" >/dev/null
+assert_contains "каталог=/tmp/clash-rs/rulesets" "$(calls)"
+
+it "clash-rs: провайдер уходит типом file, а не http на сырой список"
+set_core "clash-rs"
+reset_calls
+ruleset_add_community '{}' telegram "main" "1d" "" >/dev/null
+assert_contains '"type":"file"' "$(calls)"
 
 it "clash-rs: добавляется правило со ссылкой на набор"
 set_core "clash-rs"
 reset_calls
 ruleset_add_community '{}' telegram "main" "1d" "" >/dev/null
-assert_contains "clash_cm_add_ruleset_rule набор=community_telegram цель=main" "$(calls)"
+assert_contains "clash_cm_add_ruleset_rule набор=community-telegram-provider цель=main" "$(calls)"
 
 it "clash-rs: правило DNS не дублируется - fake-ip работает поверх всех правил"
 set_core "clash-rs"
