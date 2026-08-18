@@ -20,43 +20,68 @@ STOP=10
 USE_PROCD=1
 
 NAME=clash-rs
-PROG=/usr/bin/clash-rs
 PIDFILE=/var/run/clash-rs.pid
 PODKOP_CORE_LIB=/usr/lib/podkop/core.sh
+PROG_DEFAULT=/usr/bin/clash-rs
+CONFIG_DEFAULT=/etc/clash-rs/config.json
 
 #######################################
-# Путь к конфигу clash-rs.
+# Подтягивает слой ядра подкопа.
 #
-# Берётся из слоя ядра, а не собирается здесь заново. core_config_path отвечает
-# про АКТИВНОЕ ядро, поэтому core_is_clash подменяется заглушкой: этот
-# init-скрипт существует только ради clash-rs, и когда его зовут, конфиг нужен
-# именно клэшевый - даже если podkop.settings.core сейчас указывает на sing-box
-# (пользователь переключился, а сервис ещё не остановлен).
+# core_is_clash сразу подменяется заглушкой: core_config_path отвечает про
+# АКТИВНОЕ ядро, а этот init-скрипт существует только ради clash-rs. Когда его
+# зовут, конфиг нужен именно клэшевый - даже если podkop.settings.core сейчас
+# указывает на sing-box (пользователь переключился, а сервис ещё не остановлен).
 #
-# Если слоя ядра нет (пакет podkop снесли, скрипт остался) - путь по умолчанию.
+# Returns:
+#   1, если слоя ядра нет (пакет podkop снесли, скрипт остался)
 #######################################
-clash_rs_config_path() {
-	if [ ! -r "$PODKOP_CORE_LIB" ]; then
-		echo "/etc/clash-rs/config.json"
-		return 0
-	fi
+clash_rs_load_core() {
+	[ -r "$PODKOP_CORE_LIB" ] || return 1
 
 	# shellcheck source=/dev/null
 	. "$PODKOP_CORE_LIB"
 	core_is_clash() { return 0; }
+}
+
+# Путь к конфигу - из слоя ядра, а не собирается здесь заново
+clash_rs_config_path() {
+	clash_rs_load_core || {
+		printf '%s' "$CONFIG_DEFAULT"
+		return 0
+	}
 
 	core_config_path
 }
 
-start_service() {
-	local conffile workdir
+#######################################
+# Путь к бинарнику.
+#
+# Имя ядра живёт в core.sh (CORE_CR_BIN), а каталог установки - параметр
+# установщика. Зашить сюда /usr/bin/clash-rs означало бы третье место, где путь
+# может разъехаться с остальными двумя. Нестандартный каталог установки должен
+# быть в PATH - как и для любой другой программы на роутере.
+#######################################
+clash_rs_binary() {
+	local bin="${CORE_CR_BIN:-clash-rs}"
 
+	case "$bin" in
+	*/*) printf '%s' "$bin" ;;
+	*) command -v "$bin" 2> /dev/null || printf '%s' "$PROG_DEFAULT" ;;
+	esac
+}
+
+start_service() {
+	local prog conffile workdir
+
+	clash_rs_load_core
+	prog="$(clash_rs_binary)"
 	conffile="$(clash_rs_config_path)"
 	workdir="$(dirname "$conffile")"
 
-	if [ ! -x "$PROG" ]; then
-		echo "clash-rs не установлен: $PROG. Поставьте ядро: podkop install_core" >&2
-		logger -t "$NAME" "[error] бинарник $PROG отсутствует, стартовать нечем"
+	if [ ! -x "$prog" ]; then
+		echo "clash-rs не установлен: $prog. Поставьте ядро: podkop install_core" >&2
+		logger -t "$NAME" "[error] бинарник $prog отсутствует, стартовать нечем"
 		return 1
 	fi
 
@@ -76,7 +101,7 @@ start_service() {
 	# -d задаёт рабочий каталог: рядом с конфигом clash-rs держит своё
 	# состояние (store-selected, кэш fake-ip), и класть его в чужое место,
 	# отличное от каталога конфига, незачем.
-	procd_set_param command "$PROG" -d "$workdir" -f "$conffile"
+	procd_set_param command "$prog" -d "$workdir" -f "$conffile"
 
 	# procd следит за конфигом сам: изменился - перезапустит инстанс по reload,
 	# и подкопу не нужно угадывать, надо ли рестартовать после регенерации.

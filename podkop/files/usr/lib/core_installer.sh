@@ -58,8 +58,17 @@ CORE_INSTALLER_WORK_DIR="${CORE_INSTALLER_WORK_DIR:-/tmp/podkop-core-install}"
 # нужен - роутер ушёл в ребут с нерабочим ядром.
 CORE_INSTALLER_BACKUP_SUFFIX="${CORE_INSTALLER_BACKUP_SUFFIX:-.podkop-bak}"
 
+# Таймаут коротких запросов: редирект и API отвечают килобайтами
 CORE_INSTALLER_TIMEOUT="${CORE_INSTALLER_TIMEOUT:-20}"
 CORE_INSTALLER_RETRIES="${CORE_INSTALLER_RETRIES:-4}"
+
+# Таймаут закачки ассета - отдельный, и вот почему. curl --max-time ограничивает
+# ВСЮ операцию, а не паузу без данных. В clash_rulesets.sh он равен 60 секундам,
+# и для списка правил в сотни килобайт этого с запасом. Ассет ядра весит 19-26
+# МБ: чтобы уложиться в минуту, нужен канал от 3 Мбит/с, а на роутере с 4G или
+# с медленным DSL закачка обрывалась бы на каждой попытке - и, что хуже, ровно
+# так же, как обрывается недоступный сервер, то есть неотличимо в логе.
+CORE_INSTALLER_DOWNLOAD_TIMEOUT="${CORE_INSTALLER_DOWNLOAD_TIMEOUT:-600}"
 
 # Нижняя граница вменяемости скачанного файла. Самый маленький musl-ассет
 # clash-rs 0.10.8 - armv7, 18.5 МБ; страница ошибки GitHub или обрезанная
@@ -171,15 +180,26 @@ core_installer_triplet() {
 		printf 'aarch64-unknown-linux-musl\n'
 		;;
 
-	# 32-битный ARM с аппаратным FPU. В OpenWrt это cortex-a5/a7/a8/a9/a15/a17;
-	# ассет один - armv7 hard-float, ABI у всех перечисленных совместимый.
+	# 32-битный ARM с аппаратным FPU. Ассет один - armv7 hard-float, и ABI у
+	# всех перечисленных ядер с ним совместимый.
+	#
+	# Ядра ARMv8 (a53, a55, a72, a76) здесь не по ошибке: у части целей OpenWrt
+	# на 64-битном железе собран 32-битный userland, и DISTRIB_ARCH тогда
+	# начинается с arm_, а не aarch64_. В режиме AArch32 такой процессор
+	# исполняет armv7 hard-float как родной - именно этот ассет и нужен, а не
+	# aarch64, который на 32-битной системе просто не запустится.
 	armv7 | armv7l | armv7hl | \
 		arm_cortex-a5 | arm_cortex-a5_* | \
 		arm_cortex-a7 | arm_cortex-a7_* | \
 		arm_cortex-a8 | arm_cortex-a8_* | \
 		arm_cortex-a9 | arm_cortex-a9_* | \
 		arm_cortex-a15 | arm_cortex-a15_* | \
-		arm_cortex-a17 | arm_cortex-a17_*)
+		arm_cortex-a17 | arm_cortex-a17_* | \
+		arm_cortex-a53 | arm_cortex-a53_* | \
+		arm_cortex-a55 | arm_cortex-a55_* | \
+		arm_cortex-a72 | arm_cortex-a72_* | \
+		arm_cortex-a73 | arm_cortex-a73_* | \
+		arm_cortex-a76 | arm_cortex-a76_*)
 		printf 'armv7-unknown-linux-musleabihf\n'
 		;;
 
@@ -495,42 +515,62 @@ _core_installer_resolve_url() {
 
 # Запрос к GitHub API. Зовётся только фолбэком: у анонимного API 60 запросов в
 # час на IP, и роутеры за общим NAT выбирают лимит чужими руками.
+#
+# Ключ -f обязателен. Без него на 403 «API rate limit exceeded» curl отдаёт тело
+# ошибки с кодом 0, и разбор получает валидный JSON без tag_name - то есть
+# «версии нет» вместо «нас притормозили». Netshift на этом уже обжёгся.
 _core_installer_api_get() {
 	local url="$1" proxy="${2:-$CORE_INSTALLER_PROXY}"
 
 	command -v curl > /dev/null 2>&1 || return 1
 
 	if [ -n "$proxy" ]; then
-		curl -sS -L --max-time "$CORE_INSTALLER_TIMEOUT" \
+		curl -fsS -L --max-time "$CORE_INSTALLER_TIMEOUT" \
 			-H 'Accept: application/vnd.github+json' \
 			-x "http://$proxy" "$url" 2> /dev/null
 	else
-		curl -sS -L --max-time "$CORE_INSTALLER_TIMEOUT" \
+		curl -fsS -L --max-time "$CORE_INSTALLER_TIMEOUT" \
 			-H 'Accept: application/vnd.github+json' "$url" 2> /dev/null
 	fi
 }
 
 #######################################
 # Скачивание ассета.
+#
 # Ретраи с нарастающей паузой и разбором 429 уже написаны в clash_rulesets.sh -
 # второй такой же механизм здесь означал бы два места, где чинить один баг.
+# Подменяется только таймаут: он там рассчитан на списки правил, а не на
+# двадцатимегабайтный бинарник (см. CORE_INSTALLER_DOWNLOAD_TIMEOUT).
 #######################################
 _core_installer_download() {
 	local url="$1" dst="$2" proxy="${3:-$CORE_INSTALLER_PROXY}"
+	local saved rc
 
 	if ! command -v clash_rs_download_list > /dev/null 2>&1; then
 		_core_installer_fail "clash_rulesets.sh не подключён: скачивать нечем"
 		return 1
 	fi
 
+	saved="$CLASH_RS_DOWNLOAD_TIMEOUT"
+	CLASH_RS_DOWNLOAD_TIMEOUT="$CORE_INSTALLER_DOWNLOAD_TIMEOUT"
+
 	clash_rs_download_list "$url" "$dst" "$proxy" "$CORE_INSTALLER_RETRIES"
+	rc=$?
+
+	# Возвращаем как было: списки правил после установки ядра качаются тем же
+	# кодом, и десятиминутный таймаут на них - это десять минут ожидания там,
+	# где раньше была минута.
+	CLASH_RS_DOWNLOAD_TIMEOUT="${saved:-60}"
+
+	return "$rc"
 }
 
 #######################################
 # Запущен ли сервис ядра.
 # procd-скрипты отдают `running`, но полагаться только на него нельзя: если
-# init-скрипт команду не знает, rc.common вернёт ненулевой код, и мы решим, что
-# ядро стоит, тогда как оно работает. Поэтому вторым заходом смотрим процесс.
+# init-скрипт этой команды не знает, rc.common вернёт ненулевой код - и мы
+# решим, что ядро стоит, ровно тогда, когда оно работает. Цена ошибки - подмена
+# файла под живым процессом, поэтому вторым заходом смотрим на сам процесс.
 #######################################
 _core_installer_service_running() {
 	local service="$1" name="$2"
@@ -557,17 +597,24 @@ _core_installer_size_kb() {
 
 #######################################
 # Похоже ли на исполняемый файл ELF.
+#
 # Проверяются первые четыре байта: 0x7f E L F. HTML-страница ошибки GitHub,
 # обрезанная закачка и текст «Not Found» этот тест не проходят, а именно они и
 # приезжают вместо бинарника, когда ассета под платформу не существует.
+#
+# Читается через dd, а не head -c | od: у busybox `od` в минимальной сборке нет
+# ни -A, ни -t, а у `head` ключ -c включается отдельной опцией сборки - на
+# роутере проверка молча превратилась бы в «всё плохо». dd есть всегда.
+# Сравнение с байтами напрямую безопасно: среди четырёх нет NUL, который
+# оборвал бы строку в переменной.
 #######################################
 core_installer_is_elf() {
 	local path="$1" magic
 
 	[ -f "$path" ] || return 1
 
-	magic=$(head -c 4 "$path" 2> /dev/null | od -An -tx1 2> /dev/null | tr -d ' \t\n\r')
-	[ "$magic" = "7f454c46" ]
+	magic=$(dd if="$path" bs=1 count=4 2> /dev/null)
+	[ "$magic" = "$(printf '\177ELF')" ]
 }
 
 #######################################
@@ -590,8 +637,12 @@ core_installer_probe_version() {
 	version=$(printf '%s' "$raw" | head -n1 | awk '{ print $NF }' | tr -d '\r')
 	version="${version#v}"
 
+	# Версия начинается с цифры и не содержит ничего постороннего. Хвосты вида
+	# 0.10.8-alpha.1 пропускаем сознательно: жёсткое «только цифры и точки»
+	# сломалось бы на первом же пререлизе, а отличить его от строки «не туда»
+	# первой цифры достаточно.
 	case "$version" in
-	'' | *[!0-9.]*) return 1 ;;
+	'' | [!0-9]* | *[!0-9A-Za-z.+_-]*) return 1 ;;
 	esac
 
 	printf '%s\n' "$version"

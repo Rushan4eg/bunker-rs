@@ -154,6 +154,14 @@ assert_eq "armv7-unknown-linux-musleabihf" "$(core_installer_triplet arm_cortex-
 it "armv7l из uname -m"
 assert_eq "armv7-unknown-linux-musleabihf" "$(core_installer_triplet armv7l)"
 
+# 32-битный userland на 64-битном железе: DISTRIB_ARCH начинается с arm_, и
+# ассет нужен armv7, а не aarch64 - иначе бинарник просто не запустится
+it "arm_cortex-a72 (ARMv8 в 32-битном режиме) - это armv7, а не aarch64"
+assert_eq "armv7-unknown-linux-musleabihf" "$(core_installer_triplet arm_cortex-a72)"
+
+it "arm_cortex-a53 тоже armv7"
+assert_eq "armv7-unknown-linux-musleabihf" "$(core_installer_triplet arm_cortex-a53)"
+
 it "mipsel_24kc - ramips"
 assert_eq "mipsel-unknown-linux-musl" "$(core_installer_triplet mipsel_24kc)"
 
@@ -434,13 +442,28 @@ assert_eq "$BACKUP" "$(core_installer_backup_path)"
 
 it "скачивание делегируется clash_rs_download_list"
 out=$(
-	clash_rs_download_list() { printf 'url=%s dst=%s retries=%s' "$1" "$2" "$4"; }
+	clash_rs_download_list() {
+		printf 'url=%s dst=%s retries=%s timeout=%s' "$1" "$2" "$4" "$CLASH_RS_DOWNLOAD_TIMEOUT"
+	}
 	CORE_INSTALLER_RETRIES=4 _core_installer_download "https://example/asset" "$TMP/none"
 )
 assert_contains "url=https://example/asset" "$out"
 
 it "и получает число попыток из настройки установщика"
 assert_contains "retries=4" "$out"
+
+# Минута из clash_rulesets.sh рассчитана на списки правил; ассет ядра весит
+# 19-26 МБ, и на медленном канале он в неё не укладывается.
+it "на время закачки ассета таймаут поднимается"
+assert_contains "timeout=600" "$out"
+
+it "а после закачки возвращается прежним - списки правил ждать десять минут не должны"
+r=$(
+	clash_rs_download_list() { return 0; }
+	_core_installer_download "https://example/asset" "$TMP/none"
+	printf '%s' "$CLASH_RS_DOWNLOAD_TIMEOUT"
+)
+assert_eq "60" "$r"
 
 # ======================== место на диске ====================================
 
