@@ -37,6 +37,10 @@ define Package/podkop/prerm
 grep -q "105 podkop" /etc/iproute2/rt_tables && sed -i "/105 podkop/d" /etc/iproute2/rt_tables
 
 /etc/init.d/podkop stop
+# Ядро clash-rs ставится не пакетом, а подкопом в рантайме, поэтому свой
+# сервис надо остановить отдельно. Сам бинарник и его бэкап НЕ трогаем:
+# переустановка пакета иначе тянула бы 20 МБ заново.
+[ -x /etc/init.d/clash-rs ] && /etc/init.d/clash-rs stop
 
 exit 0
 endef
@@ -48,6 +52,7 @@ endef
 define Package/podkop/install
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/etc/init.d/podkop $(1)/etc/init.d/podkop
+	$(INSTALL_BIN) ./files/etc/init.d/clash-rs $(1)/etc/init.d/clash-rs
 
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/etc/config/podkop $(1)/etc/config/podkop

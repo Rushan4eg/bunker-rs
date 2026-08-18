@@ -58,6 +58,7 @@ jq() { "$JQ" "$@"; }
 . "$PODKOP_LIB/ruleset_dispatch.sh"
 . "$PODKOP_LIB/clash_config_builder.sh"
 . "$PODKOP_LIB/podkop_extras.sh"
+. "$PODKOP_LIB/core_installer.sh"
 
 have() { command -v "$1" >/dev/null 2>&1 && echo да || echo нет; }
 
@@ -118,7 +119,7 @@ assert_ne "$sb" "$(core_tmp_folder)"
 it "podkop подключает все новые модули"
 missing=""
 for m in core.sh clash_config_manager.sh clash_config_facade.sh \
-	clash_rulesets.sh ruleset_dispatch.sh clash_config_builder.sh podkop_extras.sh; do
+	clash_rulesets.sh ruleset_dispatch.sh clash_config_builder.sh podkop_extras.sh 	core_installer.sh; do
 	grep -q "PODKOP_LIB/$m" "$SRC" || missing="$missing $m"
 done
 assert_eq "" "$missing"
@@ -126,7 +127,7 @@ assert_eq "" "$missing"
 it "podkop проверяет наличие каждого модуля перед сорсингом"
 missing=""
 for m in core.sh clash_config_manager.sh clash_config_facade.sh \
-	clash_rulesets.sh ruleset_dispatch.sh clash_config_builder.sh podkop_extras.sh; do
+	clash_rulesets.sh ruleset_dispatch.sh clash_config_builder.sh podkop_extras.sh 	core_installer.sh; do
 	grep -q "check_required_file \"\$PODKOP_LIB/$m\"" "$SRC" || missing="$missing $m"
 done
 assert_eq "" "$missing"
@@ -156,5 +157,33 @@ assert_contains "option core" "$(cat "$(dirname "$0")/../podkop/files/etc/config
 
 it "в конфиг добавлена опция блокировки DoH"
 assert_contains "option block_doh" "$(cat "$(dirname "$0")/../podkop/files/etc/config/podkop")"
+
+# ============================ установщик ядра ===============================
+
+it "установщик подключён и его функции на месте"
+assert_eq "да" "$(have core_installer_update)"
+
+it "в podkop есть команды установки и отката ядра"
+assert_contains "install_core | update_core)" "$(cat "$SRC")"
+
+it "откат ядра тоже доступен командой"
+assert_contains "rollback_core)" "$(cat "$SRC")"
+
+it "команды описаны в справке, а не только в диспетчере"
+assert_contains "install_core            Install" "$(cat "$SRC")"
+
+it "прокси прокидывается в установщик существующим хелпером"
+assert_contains 'CORE_INSTALLER_PROXY="$(get_service_proxy_address)"' "$(cat "$SRC")"
+
+# Без этого подкоп в clash-режиме собрал бы конфиг и дёрнул сервис, которого
+# нет: clash-rs ставится не пакетом, а нами в рантайме.
+it "старт отказывается работать, если ядро не установлено"
+assert_contains "core_installer_is_installed" "$(sed -n '/^start_main()/,/^}/p' "$SRC")"
+
+it "Makefile кладёт init-скрипт clash-rs в пакет"
+assert_contains "init.d/clash-rs" "$(cat "$(dirname "$0")/../podkop/Makefile")"
+
+it "при удалении пакета сервис ядра останавливается"
+assert_contains "/etc/init.d/clash-rs stop" "$(cat "$(dirname "$0")/../podkop/Makefile")"
 
 finish

@@ -30,6 +30,7 @@ check_required_file "$PODKOP_LIB/clash_rulesets.sh"
 check_required_file "$PODKOP_LIB/ruleset_dispatch.sh"
 check_required_file "$PODKOP_LIB/clash_config_builder.sh"
 check_required_file "$PODKOP_LIB/podkop_extras.sh"
+check_required_file "$PODKOP_LIB/core_installer.sh"
 . /lib/functions.sh
 . /lib/config/uci.sh
 . /lib/functions/network.sh
@@ -47,6 +48,9 @@ check_required_file "$PODKOP_LIB/podkop_extras.sh"
 . "$PODKOP_LIB/ruleset_dispatch.sh"
 . "$PODKOP_LIB/clash_config_builder.sh"
 . "$PODKOP_LIB/podkop_extras.sh"
+# Зависит от CORE_CR_* из core.sh и от clash_rs_download_list, поэтому
+# подключается последним.
+. "$PODKOP_LIB/core_installer.sh"
 
 config_load "$PODKOP_CONFIG"
 
@@ -165,6 +169,13 @@ start_main() {
         sing_box_configure_service
         sing_box_init_config
     else
+        # Ядра может не быть вовсе: clash-rs ставится не пакетом, а нами.
+        # Без проверки подкоп собрал бы конфиг и дёрнул несуществующий
+        # сервис - в логе при этом ни слова о причине.
+        if ! core_installer_is_installed; then
+            log "Core 'clash-rs' is not installed. Run: podkop install_core. Aborted." "error"
+            exit 1
+        fi
         clash_init_config
     fi
 
@@ -2704,6 +2715,9 @@ Available commands:
     restart                 Restart podkop service
     main                    Run main podkop process
     list_update             Update domain lists
+    install_core            Install or update the selected core (clash-rs)
+    update_core             Same as install_core
+    rollback_core           Roll back the core to the previous binary
     check_proxy             Check proxy connectivity
     check_nft               Check NFT rules
     check_nft_rules         Check NFT rules status
@@ -2767,6 +2781,16 @@ check_fakeip)
     ;;
 clash_api)
     clash_api "$2" "$3" "$4"
+    ;;
+install_core | update_core)
+    # Прокси прокидываем существующим хелпером: роутеры без прямого доступа
+    # к GitHub иначе ядро не поставят вовсе.
+    CORE_INSTALLER_PROXY="$(get_service_proxy_address)"
+    export CORE_INSTALLER_PROXY
+    core_installer_update
+    ;;
+rollback_core)
+    core_installer_rollback
     ;;
 show_config)
     show_config
