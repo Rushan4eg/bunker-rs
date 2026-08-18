@@ -20,6 +20,16 @@ check_required_file "$PODKOP_LIB/sing_box_config_manager.sh"
 check_required_file "$PODKOP_LIB/sing_box_config_facade.sh"
 check_required_file "$PODKOP_LIB/logging.sh"
 check_required_file "$PODKOP_LIB/rulesets.sh"
+# --- второе ядро -----------------------------------------------------------
+# Порядок значим: core.sh нужен всем остальным, а clash_config_builder.sh
+# зовёт и менеджер, и фасад, и переключатель списков, поэтому идёт последним.
+check_required_file "$PODKOP_LIB/core.sh"
+check_required_file "$PODKOP_LIB/clash_config_manager.sh"
+check_required_file "$PODKOP_LIB/clash_config_facade.sh"
+check_required_file "$PODKOP_LIB/clash_rulesets.sh"
+check_required_file "$PODKOP_LIB/ruleset_dispatch.sh"
+check_required_file "$PODKOP_LIB/clash_config_builder.sh"
+check_required_file "$PODKOP_LIB/podkop_extras.sh"
 . /lib/functions.sh
 . /lib/config/uci.sh
 . /lib/functions/network.sh
@@ -30,28 +40,40 @@ check_required_file "$PODKOP_LIB/rulesets.sh"
 . "$PODKOP_LIB/sing_box_config_facade.sh"
 . "$PODKOP_LIB/logging.sh"
 . "$PODKOP_LIB/rulesets.sh"
+. "$PODKOP_LIB/core.sh"
+. "$PODKOP_LIB/clash_config_manager.sh"
+. "$PODKOP_LIB/clash_config_facade.sh"
+. "$PODKOP_LIB/clash_rulesets.sh"
+. "$PODKOP_LIB/ruleset_dispatch.sh"
+. "$PODKOP_LIB/clash_config_builder.sh"
+. "$PODKOP_LIB/podkop_extras.sh"
 
 config_load "$PODKOP_CONFIG"
 
 check_requirements() {
     log "Check Requirements"
 
-    local sing_box_version jq_version coreutils_base64_version
-    sing_box_version="$(sing-box version | head -n1 | awk '{print $3}')"
+    # Ядро проверяем через слой core: имя бинарника, минимальная версия и
+    # init-скрипт у sing-box и clash-rs разные. Раньше здесь было зашито
+    # sing-box, и в clash-режиме подкоп отказывался стартовать, требуя
+    # установить ядро, которым не пользуется.
+    local core_name core_ver jq_version coreutils_base64_version
+    core_name="$(core_current)"
+    core_ver="$(core_version 2> /dev/null)"
     jq_version="$(jq --version | awk -F- '{print $2}')"
     coreutils_base64_version="$(base64 --version | head -n1 | awk '{print $4}')"
 
-    if [ -z "$sing_box_version" ]; then
-        log "Package 'sing-box' is not installed. Aborted." "error"
+    if [ -z "$core_ver" ]; then
+        log "Core '$core_name' is not installed. Aborted." "error"
         exit 1
     else
-        if ! is_min_package_version "$sing_box_version" "$SB_REQUIRED_VERSION"; then
-            log "Package 'sing-box' version ($sing_box_version) is lower than the required minimum ($SB_REQUIRED_VERSION). Update sing-box: opkg update && opkg remove sing-box && opkg install sing-box. Aborted." "error"
+        if ! is_min_package_version "$core_ver" "$(core_min_version)"; then
+            log "Core '$core_name' version ($core_ver) is lower than the required minimum ($(core_min_version)). Aborted." "error"
             exit 1
         fi
 
-        if ! service_exists "sing-box"; then
-            log "Service 'sing-box' is missing. Please install the official package to ensure the service is available. Aborted." "error"
+        if ! core_service_exists; then
+            log "Service for core '$core_name' is missing. Aborted." "error"
             exit 1
         fi
     fi
@@ -123,18 +145,31 @@ start_main() {
 
     sleep 1
 
-    mkdir -p "$TMP_SING_BOX_FOLDER"
-    mkdir -p "$TMP_RULESET_FOLDER"
+    mkdir -p "$(core_tmp_folder)"
+    mkdir -p "$(ruleset_folder)"
 
     # base
     route_table_rule_mark
     create_nft_rules
-    sing_box_configure_service
 
-    # sing-box
-    sing_box_init_config
+    # Правила из podkop_extras ставим сразу после create_nft_rules: они
+    # вставляются в цепочки mangle и mangle_output, которые там и создаются.
+    podkop_extras_doh_apply
+    config_foreach podkop_extras_bypass_apply "section"
+
+    # Два ядра одновременно поднимут по tproxy-инбаунду на один порт, и второе
+    # молча не стартует. Глушим невыбранное до старта своего.
+    core_disable_others
+
+    if core_is_sing_box; then
+        sing_box_configure_service
+        sing_box_init_config
+    else
+        clash_init_config
+    fi
+
     config_foreach add_cron_job "section"
-    /etc/init.d/sing-box start
+    core_service_start
 
     log "Nice"
     list_update &
@@ -155,7 +190,7 @@ stop_main() {
 
     remove_cron_job
 
-    rm -f "$TMP_RULESET_FOLDER"/*
+    rm -f "$(ruleset_folder)"/*
 
     log "Flush nft"
     if nft list table inet "$NFT_TABLE_NAME" > /dev/null 2>&1; then
@@ -173,7 +208,7 @@ stop_main() {
     fi
 
     log "Stop sing-box"
-    /etc/init.d/sing-box stop
+    core_service_stop
 }
 
 start() {
@@ -996,16 +1031,16 @@ configure_community_list_handler() {
     local section="$2"
     local route_rule_tag="$3"
 
-    local ruleset_tag format url update_interval detour
-    ruleset_tag="$(get_ruleset_tag "$section" "$tag" "community")"
-    format="binary"
-    url="$SRS_MAIN_URL/$tag.srs"
+    local update_interval detour
     detour="$(get_download_detour_tag)"
     config_get update_interval "settings" "update_interval" "1d"
 
-    config=$(sing_box_cm_add_remote_ruleset "$config" "$ruleset_tag" "$format" "$url" "$detour" "$update_interval")
-    config=$(sing_box_cm_patch_route_rule "$config" "$route_rule_tag" "rule_set" "$ruleset_tag")
-    config=$(sing_box_cm_patch_dns_route_rule "$config" "$SB_FAKEIP_DNS_RULE_TAG" "rule_set" "$ruleset_tag")
+    # Единственное место, где подкоп решал формат набора правил. Теперь
+    # решение принимает ruleset_add_community по активному ядру: sing-box
+    # получает бинарный .srs по ссылке, clash-rs - подготовленный текстовый
+    # список файловым провайдером. Формы вызова у ядер несовместимы, поэтому
+    # развилка целиком внутри диспетчера, а не здесь.
+    config=$(ruleset_add_community "$config" "$tag" "$route_rule_tag" "$update_interval" "$detour")
 }
 
 prepare_source_ruleset() {
@@ -1016,7 +1051,7 @@ prepare_source_ruleset() {
 
     log "Preparing a $name $type rule set for '$section' section" "debug"
     ruleset_tag=$(get_ruleset_tag "$section" "$name" "$type")
-    ruleset_filepath="$TMP_RULESET_FOLDER/$ruleset_tag.json"
+    ruleset_filepath="$(ruleset_folder)/$ruleset_tag.json"
     create_source_rule_set "$ruleset_filepath"
     case $? in
     0)
@@ -1392,7 +1427,7 @@ import_domains_from_remote_plain_file() {
 
     convert_crlf_to_lf "$tmpfile"
     ruleset_tag=$(get_ruleset_tag "$section" "remote" "domains")
-    ruleset_filepath="$TMP_RULESET_FOLDER/$ruleset_tag.json"
+    ruleset_filepath="$(ruleset_folder)/$ruleset_tag.json"
     import_plain_domain_list_to_local_source_ruleset_chunked "$tmpfile" "$ruleset_filepath"
 
     rm -f "$tmpfile"
@@ -1496,7 +1531,7 @@ import_subnets_from_remote_plain_file() {
     convert_crlf_to_lf "$tmpfile"
 
     ruleset_tag=$(get_ruleset_tag "$section" "remote" "subnets")
-    ruleset_filepath="$TMP_RULESET_FOLDER/$ruleset_tag.json"
+    ruleset_filepath="$(ruleset_folder)/$ruleset_tag.json"
     import_plain_subnet_list_to_local_source_ruleset_chunked "$tmpfile" "$ruleset_filepath"
     nft_add_set_elements_from_file_chunked "$tmpfile" "$NFT_TABLE_NAME" "$NFT_COMMON_SET_NAME"
 

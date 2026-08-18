@@ -38,3 +38,11 @@ config section 'main'
         #list fully_routed_ips '192.168.1.2'
         #option mixed_proxy_enabled '1'
         #option mixed_proxy_port '2080'
+	# Ядро: sing-box (по умолчанию) либо clash-rs.
+	# Существующие установки трогать не нужно - пустое значение и любое
+	# неизвестное считаются sing-box.
+	option core 'sing-box'
+
+	# Блокировать известные DoH-резолверы. Браузер с включённым DoH ходит
+	# к своему резолверу напрямую и обходит маршрутизацию подкопа целиком.
+	option block_doh '0'
