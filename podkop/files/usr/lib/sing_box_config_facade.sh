@@ -1,6 +1,10 @@
-PODKOP_LIB="/usr/lib/podkop"
-. "$PODKOP_LIB/helpers.sh"
-. "$PODKOP_LIB/sing_box_config_manager.sh"
+# Путь задаётся снаружи, если задан: на роутере значение то же самое, а вот
+# поднять модуль где-то ещё без этого невозможно вовсе. Соседей подключаем
+# только когда их ещё нет в оболочке - иначе /usr/bin/podkop, уже подключивший
+# их сам, грузит те же файлы по второму разу.
+PODKOP_LIB="${PODKOP_LIB:-/usr/lib/podkop}"
+command -v url_get_query_param > /dev/null 2>&1 || . "$PODKOP_LIB/helpers.sh"
+command -v sing_box_cm_add_vless_outbound > /dev/null 2>&1 || . "$PODKOP_LIB/sing_box_config_manager.sh"
 
 sing_box_cf_add_dns_server() {
     local config="$1"
