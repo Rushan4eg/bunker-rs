@@ -110,6 +110,20 @@ rule-providers:
 | `add_dns_route_rule` | `dns.nameserver-policy: {"+.example.com": "..."}` | карта, а не список правил |
 | `patch_dns_route_rule` | правка той же карты | |
 | `add_dns_reject_rule` | `dns.fake-ip-filter` либо `REJECT` в `rules` | зависит от смысла |
+| DNS через прокси | фрагмент `#proxy=<имя>` у сервера | нативно, отдельной опции не нужно |
+| DNS через интерфейс | фрагмент `#interface=<имя>` у сервера | нативно |
+
+Про фрагменты: clash-rs разбирает их в `parse_outbound_proxy` (`app/dns/config.rs`),
+то есть «резолвить через такой-то выход» пишется прямо в адресе сервера:
+
+```yaml
+dns:
+  nameserver:
+    - "https://dns.google/dns-query#proxy=VLESS-out"
+```
+
+У sing-box для этого отдельное поле `detour` у DNS-сервера. Форма разная,
+смысл тот же, обходных путей не требуется.
 
 Диапазон fake-ip совпадает: подкоп использует `198.18.0.0/15`, в примерах
 clash-rs `198.18.0.2/16`. Формат одинаковый, менять нечего.
