@@ -429,110 +429,6 @@ clash_sub_provider_json() {
 		+ (if $path != "" then {path: $path} else {} end)'
 }
 
-#######################################
-# Положить готовое описание в proxy-providers.
-#
-# ЭТО ФУНКЦИЯ МЕНЕДЖЕРА, живущая не в менеджере: в clash_config_manager.sh
-# работы с proxy-providers нет вовсе (есть только rule-providers), а править
-# чужой файл в рамках этой задачи нельзя. При интеграции её стоит перенести
-# в менеджер под именем clash_cm_add_raw_proxy_provider - она ничем не
-# отличается от clash_cm_add_raw_rule_provider, кроме ключа.
-# Arguments:
-#   config: строка (JSON), конфигурация для изменения
-#   name: строка, ключ в proxy-providers
-#   provider: строка (JSON), объект провайдера целиком
-# Outputs:
-#   Пишет изменённую конфигурацию в stdout
-# Returns:
-#   1 если имя пусто либо provider не разбирается как JSON
-# Example:
-#   CONFIG=$(clash_sub_add_raw_provider "$CONFIG" "main-sub1" "$PROVIDER_JSON")
-#######################################
-clash_sub_add_raw_provider() {
-	local config="$1" name="$2" provider="$3"
-
-	[ -n "$name" ] || return 1
-	printf '%s' "$provider" | _clash_sub_jq -e . > /dev/null 2>&1 || return 1
-
-	# shellcheck disable=SC2016  # $name и $provider - переменные jq, не шелла
-	printf '%s\n' "$config" | _clash_sub_jq \
-		--arg name "$name" \
-		--argjson provider "$provider" \
-		'.["proxy-providers"] = ((.["proxy-providers"] // {}) + {($name): $provider})'
-}
-
-#######################################
-# Добавить группу, участники которой берутся из провайдеров.
-#
-# Тоже функция менеджера не на своём месте: clash_cm_add_select_group и
-# clash_cm_add_urltest_group умеют только поимённый список proxies и поля use
-# не знают, а имена серверов подписки нам на этапе сборки конфига неизвестны -
-# их узнает ядро, когда скачает тело. Переносить в менеджер вместе с
-# предыдущей.
-# Arguments:
-#   config: строка (JSON), конфигурация для изменения
-#   name: строка, имя группы
-#   kind: строка, urltest|url-test либо selector|select
-#   use_json: строка, JSON-массив имён провайдеров
-#   proxies_json: строка, JSON-массив дополнительных участников поимённо
-#                 (необязательный; пустой массив в конфиг не пишется)
-#   url: строка, чем мерять задержку (необязательный)
-#   interval: строка или число, период замера в секундах (необязательный)
-#   tolerance: строка или число, допуск в мс (необязательный)
-#   lazy: строка, "true"/"1" (необязательный)
-# Outputs:
-#   Пишет изменённую конфигурацию в stdout
-# Returns:
-#   1 при неизвестном типе группы или неразбираемых массивах
-# Example:
-#   CONFIG=$(clash_sub_add_provider_group "$CONFIG" "main-out" select '["main-sub1"]' "" "" "" "" "")
-#######################################
-clash_sub_add_provider_group() {
-	local config="$1" name="$2" kind="$3" use_json="$4" proxies_json="$5"
-	local url="$6" interval="$7" tolerance="$8" lazy="$9"
-	local type lazy_json=""
-
-	[ -n "$name" ] || return 1
-
-	case "$kind" in
-	urltest | url-test | url_test) type="url-test" ;;
-	selector | select) type="select" ;;
-	*)
-		_clash_sub_log "Неизвестный тип группы подписки: '$kind'" "error"
-		return 1
-		;;
-	esac
-
-	[ -n "$use_json" ] || use_json="[]"
-	[ -n "$proxies_json" ] || proxies_json="[]"
-
-	printf '%s' "$use_json" | _clash_sub_jq -e 'type == "array"' > /dev/null 2>&1 || return 1
-	printf '%s' "$proxies_json" | _clash_sub_jq -e 'type == "array"' > /dev/null 2>&1 || return 1
-
-	if [ -n "$lazy" ]; then
-		if _clash_sub_is_true "$lazy"; then lazy_json="true"; else lazy_json="false"; fi
-	fi
-
-	# shellcheck disable=SC2016  # $name и прочее - переменные jq, не шелла
-	printf '%s\n' "$config" | _clash_sub_jq \
-		--arg name "$name" \
-		--arg type "$type" \
-		--argjson use "$use_json" \
-		--argjson proxies "$proxies_json" \
-		--arg url "$url" \
-		--arg interval "$interval" \
-		--arg tolerance "$tolerance" \
-		--arg lazy "$lazy_json" \
-		'.["proxy-groups"] = ((.["proxy-groups"] // []) + [(
-			{name: $name, type: $type, use: $use}
-			+ (if ($proxies | length) > 0 then {proxies: $proxies} else {} end)
-			+ (if $url != "" then {url: $url} else {} end)
-			+ (if $interval != "" then {interval: ($interval | tonumber)} else {} end)
-			+ (if $tolerance != "" then {tolerance: ($tolerance | tonumber)} else {} end)
-			+ (if $lazy == "" then {} else {lazy: ($lazy == "true")} end)
-		)])'
-}
-
 ## --- настройки секции -------------------------------------------------------
 
 #######################################
@@ -709,7 +605,7 @@ clash_sub_configure_section() {
 			return 1
 		}
 
-		new_config=$(clash_sub_add_raw_provider "$config" "$name" "$provider") || {
+		new_config=$(clash_cm_add_raw_proxy_provider "$config" "$name" "$provider") || {
 			_clash_sub_log "Секция $section: не добавить подписку $name в конфиг" "error"
 			printf '%s' "$original"
 			return 1
@@ -736,7 +632,7 @@ EOF
 	urltest)
 		urltest_name=$(clash_sub_group_name "$section-urltest")
 
-		new_config=$(clash_sub_add_provider_group "$config" "$urltest_name" "url-test" \
+		new_config=$(clash_cm_add_provider_group "$config" "$urltest_name" "url-test" \
 			"$use_json" "" "$test_url" "$seconds" "$tolerance" "$lazy") || {
 			_clash_sub_log "Секция $section: не собрать url-test-группу подписки" "error"
 			printf '%s' "$original"
@@ -744,7 +640,7 @@ EOF
 		}
 		config="$new_config"
 
-		new_config=$(clash_sub_add_provider_group "$config" "$group_name" "select" \
+		new_config=$(clash_cm_add_provider_group "$config" "$group_name" "select" \
 			"$use_json" "$(_clash_sub_json_array "$urltest_name")" "" "" "" "") || {
 			_clash_sub_log "Секция $section: не собрать select-группу подписки" "error"
 			printf '%s' "$original"
@@ -756,7 +652,7 @@ EOF
 		# selector. Ветка по умолчанию, а не по имени: group_kind проверен
 		# выше, и попасть сюда с чем-то третьим нельзя - зато при любом
 		# недосмотре группа всё равно появится, а не потеряется
-		new_config=$(clash_sub_add_provider_group "$config" "$group_name" "select" \
+		new_config=$(clash_cm_add_provider_group "$config" "$group_name" "select" \
 			"$use_json" "" "" "" "" "") || {
 			_clash_sub_log "Секция $section: не собрать select-группу подписки" "error"
 			printf '%s' "$original"

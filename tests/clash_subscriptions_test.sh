@@ -74,6 +74,14 @@ config_get() {
 # --- модули ------------------------------------------------------------------
 
 . "$LIB/core.sh"
+# Менеджер зовёт jq по имени, как и на роутере; подписки оборачивают его в
+# _clash_sub_jq. Подменяем поиск по PATH - тот же приём, что в тестах
+# менеджера.
+jq() { "$JQ" "$@"; }
+
+# Менеджер нужен целиком: две функции работы с proxy-providers переехали
+# туда из подписок - там им и место, рядом с близнецом для rule-providers.
+. "$LIB/clash_config_manager.sh"
 . "$LIB/clash_rulesets.sh"
 . "$LIB/clash_subscriptions.sh"
 
@@ -175,61 +183,61 @@ assert_eq "1" "$(clash_sub_provider_json "$SUB_A" "" "" "" "" "" "не json" >/d
 
 it "add_raw_provider заводит раздел proxy-providers"
 assert_jq '.["proxy-providers"] | keys | join(",")' "main-sub1" \
-	"$(clash_sub_add_raw_provider "$C" main-sub1 '{"type":"http"}')"
+	"$(clash_cm_add_raw_proxy_provider "$C" main-sub1 '{"type":"http"}')"
 
 it "add_raw_provider дописывает, а не затирает"
 assert_jq '.["proxy-providers"] | keys | sort | join(",")' "main-sub1,main-sub2" \
-	"$(clash_sub_add_raw_provider \
-		"$(clash_sub_add_raw_provider "$C" main-sub1 '{"type":"http"}')" \
+	"$(clash_cm_add_raw_proxy_provider \
+		"$(clash_cm_add_raw_proxy_provider "$C" main-sub1 '{"type":"http"}')" \
 		main-sub2 '{"type":"http"}')"
 
 it "add_raw_provider не трогает остальной конфиг"
 assert_jq '.rules | length' "0" \
-	"$(clash_sub_add_raw_provider "$C" main-sub1 '{"type":"http"}')"
+	"$(clash_cm_add_raw_proxy_provider "$C" main-sub1 '{"type":"http"}')"
 
 it "add_raw_provider не пускает в конфиг не-JSON"
-assert_eq "1" "$(clash_sub_add_raw_provider "$C" main-sub1 'мусор' >/dev/null 2>&1; echo $?)"
+assert_eq "1" "$(clash_cm_add_raw_proxy_provider "$C" main-sub1 'мусор' >/dev/null 2>&1; echo $?)"
 
 it "add_raw_provider не пускает провайдера без имени"
-assert_eq "1" "$(clash_sub_add_raw_provider "$C" "" '{"type":"http"}' >/dev/null 2>&1; echo $?)"
+assert_eq "1" "$(clash_cm_add_raw_proxy_provider "$C" "" '{"type":"http"}' >/dev/null 2>&1; echo $?)"
 
 # ============================ группы поверх провайдеров =====================
 
 it "add_provider_group собирает url-test"
 assert_jq '.["proxy-groups"][0].type' "url-test" \
-	"$(clash_sub_add_provider_group "$C" auto urltest '["main-sub1"]' "" "" "" "" "")"
+	"$(clash_cm_add_provider_group "$C" auto urltest '["main-sub1"]' "" "" "" "" "")"
 
 it "add_provider_group собирает select"
 assert_jq '.["proxy-groups"][0].type' "select" \
-	"$(clash_sub_add_provider_group "$C" main-out selector '["main-sub1"]' "" "" "" "" "")"
+	"$(clash_cm_add_provider_group "$C" main-out selector '["main-sub1"]' "" "" "" "" "")"
 
 it "add_provider_group ссылается на провайдера через use"
 assert_jq '.["proxy-groups"][0].use | join(",")' "main-sub1,main-sub2" \
-	"$(clash_sub_add_provider_group "$C" auto urltest '["main-sub1","main-sub2"]' "" "" "" "" "")"
+	"$(clash_cm_add_provider_group "$C" auto urltest '["main-sub1","main-sub2"]' "" "" "" "" "")"
 
 it "add_provider_group без поимённых участников не пишет proxies"
 assert_jq '.["proxy-groups"][0] | has("proxies")' "false" \
-	"$(clash_sub_add_provider_group "$C" auto urltest '["main-sub1"]' "" "" "" "" "")"
+	"$(clash_cm_add_provider_group "$C" auto urltest '["main-sub1"]' "" "" "" "" "")"
 
 it "add_provider_group пишет поимённых участников, если они есть"
 assert_jq '.["proxy-groups"][0].proxies | join(",")' "main-urltest-out" \
-	"$(clash_sub_add_provider_group "$C" main-out select '["main-sub1"]' '["main-urltest-out"]' "" "" "" "")"
+	"$(clash_cm_add_provider_group "$C" main-out select '["main-sub1"]' '["main-urltest-out"]' "" "" "" "")"
 
 it "add_provider_group переносит url, интервал и допуск"
 assert_jq '.["proxy-groups"][0] | [.url, (.interval|tostring), (.tolerance|tostring)] | join(",")' \
 	"http://cp.example/204,300,50" \
-	"$(clash_sub_add_provider_group "$C" auto urltest '["main-sub1"]' "" "http://cp.example/204" 300 50 "")"
+	"$(clash_cm_add_provider_group "$C" auto urltest '["main-sub1"]' "" "http://cp.example/204" 300 50 "")"
 
 it "add_provider_group без необязательных полей их не заводит"
 assert_jq '.["proxy-groups"][0] | [has("url"), has("interval"), has("tolerance"), has("lazy")] | join(",")' \
 	"false,false,false,false" \
-	"$(clash_sub_add_provider_group "$C" auto urltest '["main-sub1"]' "" "" "" "" "")"
+	"$(clash_cm_add_provider_group "$C" auto urltest '["main-sub1"]' "" "" "" "" "")"
 
 it "add_provider_group отказывается от неизвестного типа"
-assert_eq "1" "$(clash_sub_add_provider_group "$C" auto fallback '["main-sub1"]' "" "" "" "" "" >/dev/null 2>&1; echo $?)"
+assert_eq "1" "$(clash_cm_add_provider_group "$C" auto fallback '["main-sub1"]' "" "" "" "" "" >/dev/null 2>&1; echo $?)"
 
 it "add_provider_group отказывается от use, который не массив"
-assert_eq "1" "$(clash_sub_add_provider_group "$C" auto urltest '{"a":1}' "" "" "" "" "" >/dev/null 2>&1; echo $?)"
+assert_eq "1" "$(clash_cm_add_provider_group "$C" auto urltest '{"a":1}' "" "" "" "" "" >/dev/null 2>&1; echo $?)"
 
 # ============================ ссылки секции =================================
 

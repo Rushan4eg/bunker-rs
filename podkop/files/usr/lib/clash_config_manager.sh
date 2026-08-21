@@ -30,6 +30,24 @@
 CLASH_DEFAULT_FAKEIP_RANGE="198.18.0.0/15"
 
 #######################################
+# Истиной считается ровно "true", "1", "yes" и "on".
+# Заведено при переносе функций из clash_subscriptions.sh: там был свой
+# такой же помощник, а в менеджере булевы значения до сих пор сравнивались
+# с "true" прямо в jq. Держать два разных понимания истины в одном файле -
+# верный способ разойтись.
+# Arguments:
+#   value: строка
+# Returns:
+#   0 если значение истинно
+#######################################
+_clash_cm_is_true() {
+	case "$1" in
+	true | TRUE | True | 1 | yes | YES | on | ON) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+#######################################
 # Задать уровень логирования в конфигурации Clash.
 # У sing-box это объект log{}, у clash-rs — скаляр log-level.
 # Arguments:
@@ -1026,6 +1044,112 @@ clash_cm_add_http_rule_provider() {
 # Example:
 #   CONFIG=$(clash_cm_add_file_rule_provider "$CONFIG" "local-domains" "domain" "text" "/tmp/podkop/local.lst")
 #######################################
+
+#######################################
+# Положить готовое описание в proxy-providers.
+#
+# ЭТО ФУНКЦИЯ МЕНЕДЖЕРА, живущая не в менеджере: в clash_config_manager.sh
+# работы с proxy-providers нет вовсе (есть только rule-providers), а править
+# чужой файл в рамках этой задачи нельзя. При интеграции её стоит перенести
+# в менеджер под именем clash_cm_add_raw_proxy_provider - она ничем не
+# отличается от clash_cm_add_raw_rule_provider, кроме ключа.
+# Arguments:
+#   config: строка (JSON), конфигурация для изменения
+#   name: строка, ключ в proxy-providers
+#   provider: строка (JSON), объект провайдера целиком
+# Outputs:
+#   Пишет изменённую конфигурацию в stdout
+# Returns:
+#   1 если имя пусто либо provider не разбирается как JSON
+# Example:
+#   CONFIG=$(clash_cm_add_raw_proxy_provider "$CONFIG" "main-sub1" "$PROVIDER_JSON")
+#######################################
+clash_cm_add_raw_proxy_provider() {
+	local config="$1" name="$2" provider="$3"
+
+	[ -n "$name" ] || return 1
+	printf '%s' "$provider" | jq -e . > /dev/null 2>&1 || return 1
+
+	# shellcheck disable=SC2016  # $name и $provider - переменные jq, не шелла
+	printf '%s\n' "$config" | jq \
+		--arg name "$name" \
+		--argjson provider "$provider" \
+		'.["proxy-providers"] = ((.["proxy-providers"] // {}) + {($name): $provider})'
+}
+
+
+#######################################
+# Добавить группу, участники которой берутся из провайдеров.
+#
+# Тоже функция менеджера не на своём месте: clash_cm_add_select_group и
+# clash_cm_add_urltest_group умеют только поимённый список proxies и поля use
+# не знают, а имена серверов подписки нам на этапе сборки конфига неизвестны -
+# их узнает ядро, когда скачает тело. Переносить в менеджер вместе с
+# предыдущей.
+# Arguments:
+#   config: строка (JSON), конфигурация для изменения
+#   name: строка, имя группы
+#   kind: строка, urltest|url-test либо selector|select
+#   use_json: строка, JSON-массив имён провайдеров
+#   proxies_json: строка, JSON-массив дополнительных участников поимённо
+#                 (необязательный; пустой массив в конфиг не пишется)
+#   url: строка, чем мерять задержку (необязательный)
+#   interval: строка или число, период замера в секундах (необязательный)
+#   tolerance: строка или число, допуск в мс (необязательный)
+#   lazy: строка, "true"/"1" (необязательный)
+# Outputs:
+#   Пишет изменённую конфигурацию в stdout
+# Returns:
+#   1 при неизвестном типе группы или неразбираемых массивах
+# Example:
+#   CONFIG=$(clash_cm_add_provider_group "$CONFIG" "main-out" select '["main-sub1"]' "" "" "" "" "")
+#######################################
+clash_cm_add_provider_group() {
+	local config="$1" name="$2" kind="$3" use_json="$4" proxies_json="$5"
+	local url="$6" interval="$7" tolerance="$8" lazy="$9"
+	local type lazy_json=""
+
+	[ -n "$name" ] || return 1
+
+	case "$kind" in
+	urltest | url-test | url_test) type="url-test" ;;
+	selector | select) type="select" ;;
+	*)
+		log "Неизвестный тип группы подписки: '$kind'" "error"
+		return 1
+		;;
+	esac
+
+	[ -n "$use_json" ] || use_json="[]"
+	[ -n "$proxies_json" ] || proxies_json="[]"
+
+	printf '%s' "$use_json" | jq -e 'type == "array"' > /dev/null 2>&1 || return 1
+	printf '%s' "$proxies_json" | jq -e 'type == "array"' > /dev/null 2>&1 || return 1
+
+	if [ -n "$lazy" ]; then
+		if _clash_cm_is_true "$lazy"; then lazy_json="true"; else lazy_json="false"; fi
+	fi
+
+	# shellcheck disable=SC2016  # $name и прочее - переменные jq, не шелла
+	printf '%s\n' "$config" | jq \
+		--arg name "$name" \
+		--arg type "$type" \
+		--argjson use "$use_json" \
+		--argjson proxies "$proxies_json" \
+		--arg url "$url" \
+		--arg interval "$interval" \
+		--arg tolerance "$tolerance" \
+		--arg lazy "$lazy_json" \
+		'.["proxy-groups"] = ((.["proxy-groups"] // []) + [(
+			{name: $name, type: $type, use: $use}
+			+ (if ($proxies | length) > 0 then {proxies: $proxies} else {} end)
+			+ (if $url != "" then {url: $url} else {} end)
+			+ (if $interval != "" then {interval: ($interval | tonumber)} else {} end)
+			+ (if $tolerance != "" then {tolerance: ($tolerance | tonumber)} else {} end)
+			+ (if $lazy == "" then {} else {lazy: ($lazy == "true")} end)
+		)])'
+}
+
 #######################################
 # Положить в rule-providers готовое описание провайдера, как есть.
 #
