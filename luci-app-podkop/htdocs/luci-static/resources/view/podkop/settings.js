@@ -380,6 +380,41 @@ function createSettingsContent(section) {
 
   o = section.option(
     form.ListValue,
+    "core",
+    _("Proxy core"),
+    _(
+      "sing-box is installed as a package. clash-rs is fetched by podkop itself: run 'podkop install_core' after switching.",
+    ),
+  );
+  o.value("sing-box", "sing-box");
+  o.value("clash-rs", "clash-rs");
+  o.default = "sing-box";
+  o.rmempty = false;
+
+  o = section.option(
+    form.Flag,
+    "block_doh",
+    _("Block DNS-over-HTTPS"),
+    _(
+      "A browser with DoH enabled reaches its own resolver directly and bypasses podkop routing entirely. Only port 443 of known DoH providers is blocked, so plain DNS and DoT keep working.",
+    ),
+  );
+  o.default = "0";
+  o.rmempty = false;
+
+  o = section.option(
+    form.Flag,
+    "core_watchdog",
+    _("Core watchdog"),
+    _(
+      "If the core dies, dnsmasq keeps pointing at a dead resolver and the router loses DNS entirely. The watchdog restores dnsmasq first, then tries to bring the core back.",
+    ),
+  );
+  o.default = "0";
+  o.rmempty = false;
+
+  o = section.option(
+    form.ListValue,
     "log_level",
     _("Log Level"),
     _(

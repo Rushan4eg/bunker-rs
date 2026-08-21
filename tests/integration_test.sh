@@ -186,4 +186,50 @@ assert_contains "init.d/clash-rs" "$(cat "$(dirname "$0")/../podkop/Makefile")"
 it "при удалении пакета сервис ядра останавливается"
 assert_contains "/etc/init.d/clash-rs stop" "$(cat "$(dirname "$0")/../podkop/Makefile")"
 
+# ============================ интерфейс LuCI ================================
+#
+# Опции бэкенда без галочек в интерфейсе никто не найдёт: подкоп настраивают
+# через LuCI, а не через uci. Файлы settings.js и section.js собираются не из
+# TypeScript, а правятся руками, поэтому и проверяем их как текст.
+
+UI="$(dirname "$0")/../luci-app-podkop/htdocs/luci-static/resources/view/podkop"
+
+it "выбор ядра есть в настройках"
+assert_contains '"core",' "$(cat "$UI/settings.js")"
+
+it "в выборе ядра оба варианта"
+assert_contains 'o.value("clash-rs", "clash-rs")' "$(cat "$UI/settings.js")"
+
+it "по умолчанию в интерфейсе тоже sing-box"
+assert_contains 'o.value("sing-box", "sing-box")' "$(cat "$UI/settings.js")"
+
+it "блокировка DoH есть в настройках"
+assert_contains '"block_doh",' "$(cat "$UI/settings.js")"
+
+it "сторож ядра есть в настройках"
+assert_contains '"core_watchdog",' "$(cat "$UI/settings.js")"
+
+it "тип подключения bypass есть в секциях"
+assert_contains 'o.value("bypass", "Bypass")' "$(cat "$UI/section.js")"
+
+# node на Windows - нативная программа и POSIX-путь не понимает, а конверсию
+# путей мы для всего набора отключили ради jq. Поэтому под Windows приводим
+# путь через cygpath; на линуксе он не нужен и ветка не выполняется.
+js_ok() {
+	command -v node > /dev/null 2>&1 || return 0 # нет node - нечем проверять
+	f="$1"
+	if [ -n "$WINDIR" ] && command -v cygpath > /dev/null 2>&1; then
+		f=$(cygpath -w "$f")
+	fi
+	node --check "$f" > /dev/null 2>&1
+}
+
+it "settings.js остался валидным JS"
+js_ok "$UI/settings.js" && r=да || r=нет
+assert_eq "да" "$r"
+
+it "section.js остался валидным JS"
+js_ok "$UI/section.js" && r=да || r=нет
+assert_eq "да" "$r"
+
 finish

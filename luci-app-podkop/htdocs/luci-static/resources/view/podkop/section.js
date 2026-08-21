@@ -16,6 +16,10 @@ function createSectionContent(section) {
   o.value("vpn", "VPN");
   o.value("block", "Block");
   o.value("exclusion", "Exclusion");
+  // Bypass отличается от Exclusion тем, что трафик вообще не заходит в ядро:
+  // он не получает tproxy-метку в nftables. Exclusion работает внутри ядра,
+  // правилом на прямой выход.
+  o.value("bypass", "Bypass");
 
   o = section.option(
     form.ListValue,
