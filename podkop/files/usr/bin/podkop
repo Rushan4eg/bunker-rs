@@ -31,6 +31,8 @@ check_required_file "$PODKOP_LIB/ruleset_dispatch.sh"
 check_required_file "$PODKOP_LIB/clash_config_builder.sh"
 check_required_file "$PODKOP_LIB/podkop_extras.sh"
 check_required_file "$PODKOP_LIB/core_installer.sh"
+check_required_file "$PODKOP_LIB/core_watchdog.sh"
+check_required_file "$PODKOP_LIB/clash_subscriptions.sh"
 . /lib/functions.sh
 . /lib/config/uci.sh
 . /lib/functions/network.sh
@@ -51,6 +53,8 @@ check_required_file "$PODKOP_LIB/core_installer.sh"
 # Зависит от CORE_CR_* из core.sh и от clash_rs_download_list, поэтому
 # подключается последним.
 . "$PODKOP_LIB/core_installer.sh"
+. "$PODKOP_LIB/core_watchdog.sh"
+. "$PODKOP_LIB/clash_subscriptions.sh"
 
 config_load "$PODKOP_CONFIG"
 
@@ -689,7 +693,11 @@ configure_outbound_handler() {
             fi
             config=$(sing_box_cf_add_proxy_outbound "$config" "$section" "$proxy_string" "$udp_over_tcp")
             ;;
-        outbound)
+        subscription)
+            log "Subscriptions require the clash-rs core. Switch the core in settings and run 'podkop install_core'. Aborted." "fatal"
+            exit 1
+            ;;
+    outbound)
             log "Detected proxy configuration type: outbound" "debug"
             local json_outbound
             config_get json_outbound "$section" "outbound_json"
@@ -2718,6 +2726,8 @@ Available commands:
     install_core            Install or update the selected core (clash-rs)
     update_core             Same as install_core
     rollback_core           Roll back the core to the previous binary
+    dnsmasq_restore         Restore dnsmasq to the system resolver
+    watchdog                Run the core watchdog loop
     check_proxy             Check proxy connectivity
     check_nft               Check NFT rules
     check_nft_rules         Check NFT rules status
@@ -2791,6 +2801,14 @@ install_core | update_core)
     ;;
 rollback_core)
     core_installer_rollback
+    ;;
+dnsmasq_restore)
+    # Зовётся сторожем ядра. Без этой ветки он получал бы справку и код 1,
+    # то есть делал бы только рестарт ядра - ровно без того, ради чего написан.
+    dnsmasq_restore
+    ;;
+watchdog)
+    core_watchdog_loop
     ;;
 show_config)
     show_config

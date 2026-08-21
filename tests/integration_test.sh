@@ -59,6 +59,8 @@ jq() { "$JQ" "$@"; }
 . "$PODKOP_LIB/clash_config_builder.sh"
 . "$PODKOP_LIB/podkop_extras.sh"
 . "$PODKOP_LIB/core_installer.sh"
+. "$PODKOP_LIB/core_watchdog.sh"
+. "$PODKOP_LIB/clash_subscriptions.sh"
 
 have() { command -v "$1" >/dev/null 2>&1 && echo да || echo нет; }
 
@@ -119,7 +121,8 @@ assert_ne "$sb" "$(core_tmp_folder)"
 it "podkop подключает все новые модули"
 missing=""
 for m in core.sh clash_config_manager.sh clash_config_facade.sh \
-	clash_rulesets.sh ruleset_dispatch.sh clash_config_builder.sh podkop_extras.sh 	core_installer.sh; do
+	clash_rulesets.sh ruleset_dispatch.sh clash_config_builder.sh podkop_extras.sh \
+	core_installer.sh core_watchdog.sh clash_subscriptions.sh; do
 	grep -q "PODKOP_LIB/$m" "$SRC" || missing="$missing $m"
 done
 assert_eq "" "$missing"
@@ -127,7 +130,8 @@ assert_eq "" "$missing"
 it "podkop проверяет наличие каждого модуля перед сорсингом"
 missing=""
 for m in core.sh clash_config_manager.sh clash_config_facade.sh \
-	clash_rulesets.sh ruleset_dispatch.sh clash_config_builder.sh podkop_extras.sh 	core_installer.sh; do
+	clash_rulesets.sh ruleset_dispatch.sh clash_config_builder.sh podkop_extras.sh \
+	core_installer.sh core_watchdog.sh clash_subscriptions.sh; do
 	grep -q "check_required_file \"\$PODKOP_LIB/$m\"" "$SRC" || missing="$missing $m"
 done
 assert_eq "" "$missing"
@@ -231,5 +235,38 @@ assert_eq "да" "$r"
 it "section.js остался валидным JS"
 js_ok "$UI/section.js" && r=да || r=нет
 assert_eq "да" "$r"
+
+# ============================ сторож и подписки =============================
+
+it "сторож ядра подключён"
+assert_eq "да" "$(have core_watchdog_tick)"
+
+it "подписки подключены"
+assert_eq "да" "$(have clash_sub_configure_section)"
+
+# Без этой ветки сторож получил бы от подкопа справку и код 1, то есть сделал
+# бы только рестарт ядра - ровно без того, ради чего он написан.
+it "podkop умеет команду восстановления dnsmasq"
+assert_contains "dnsmasq_restore)" "$(cat "$SRC")"
+
+it "цикл сторожа запускается командой"
+assert_contains "watchdog)" "$(cat "$SRC")"
+
+it "обе команды описаны в справке"
+assert_contains "dnsmasq_restore         Restore" "$(cat "$SRC")"
+
+it "билдер знает тип секции subscription"
+assert_contains "subscription)" "$(cat "$PODKOP_LIB/clash_config_builder.sh")"
+
+# На sing-box подписок нет вовсе, и молчаливое "Unknown type" тут никому не
+# помогает: надо сказать, что делать.
+it "при sing-box подписка даёт внятный отказ, а не Unknown type"
+assert_contains "Subscriptions require the clash-rs core" "$(cat "$SRC")"
+
+it "подписка есть в интерфейсе секций"
+assert_contains 'o.value("subscription"' "$(cat "$UI/section.js")"
+
+it "поле ссылки подписки есть в интерфейсе"
+assert_contains '"subscription_url",' "$(cat "$UI/section.js")"
 
 finish

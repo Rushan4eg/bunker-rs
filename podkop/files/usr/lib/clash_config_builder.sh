@@ -404,6 +404,15 @@ clash_configure_proxy_section() {
         log "Detected proxy configuration type: urltest" "debug"
         clash_configure_group_section "$section" "urltest"
         ;;
+    subscription)
+        # Подписка есть только на clash-ветке: у sing-box её нет вовсе.
+        # Без этой ветки секция с подпиской попадала бы в *) и убивала сборку.
+        log "Detected proxy configuration type: subscription" "debug"
+        config=$(clash_sub_configure_section "$config" "$section") || {
+            log "Failed to configure subscription for '$section' section. Aborted." "fatal"
+            exit 1
+        }
+        ;;
     *)
         log "Unknown proxy configuration type: '$proxy_config_type'. Aborted." "fatal"
         exit 1

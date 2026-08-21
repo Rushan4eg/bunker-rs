@@ -31,8 +31,42 @@ function createSectionContent(section) {
   o.value("selector", _("Selector"));
   o.value("urltest", _("URLTest"));
   o.value("outbound", _("Outbound Config"));
+  // Подписка есть только на ядре clash-rs: там она выражается штатным
+  // proxy-providers, и ядро само качает список, обновляет его и проверяет
+  // живость серверов. На sing-box подкоп откажется собирать такую секцию.
+  o.value("subscription", _("Subscription (clash-rs only)"));
   o.default = "url";
   o.depends("connection_type", "proxy");
+
+  o = section.option(
+    form.DynamicList,
+    "subscription_url",
+    _("Subscription URL"),
+    _(
+      "Link from your panel. Take the one in clash format: clash-rs sends its own User-Agent and cannot pretend to be another client.",
+    ),
+  );
+  o.depends("proxy_config_type", "subscription");
+
+  o = section.option(
+    form.ListValue,
+    "subscription_group_type",
+    _("Subscription server selection"),
+    _("URLTest picks the fastest server automatically, Selector lets you choose by hand."),
+  );
+  o.value("urltest", _("URLTest"));
+  o.value("selector", _("Selector"));
+  o.default = "urltest";
+  o.depends("proxy_config_type", "subscription");
+
+  o = section.option(
+    form.Value,
+    "subscription_update_interval",
+    _("Subscription update interval"),
+    _("How often the core refetches the server list, for example 1h or 12h."),
+  );
+  o.placeholder = "1h";
+  o.depends("proxy_config_type", "subscription");
 
   o = section.option(
     form.TextValue,
