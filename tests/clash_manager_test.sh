@@ -533,4 +533,27 @@ assert_jq 'keys | join(",")' \
 	"bind-address,dns,external-controller,log-level,mode,profile,proxies,proxy-groups,rule-providers,rules,secret,tproxy-port" \
 	"$(printf '%s' "$FULL" | "$JQ" -S .)"
 
+# ============================ CORS для Clash API =============================
+#
+# Выяснено на живом clash-rs 0.10.8: он отказывается поднимать API на
+# нелокальном адресе, пока не заданы И секрет, И CORS. Причём ругается по
+# очереди - сначала на секрет, потом на CORS, - так что второе требование
+# обнаруживается только после того, как закрыто первое. У sing-box такой
+# настройки нет вовсе, поэтому у апстрима вопрос не возникал.
+
+it "источники попадают в конфиг списком"
+assert_jq '.["cors-allow-origins"] | join(",")' "*" 	"$(clash_cm_set_cors_origins "$(clash_empty_config)" "*")"
+
+it "несколько источников разбираются по пробелу"
+assert_jq '.["cors-allow-origins"] | join(",")' "http://a,http://b" 	"$(clash_cm_set_cors_origins "$(clash_empty_config)" "http://a http://b")"
+
+it "пустое значение убирает ключ, а не пишет пустой список"
+assert_jq 'has("cors-allow-origins")' "false" 	"$(clash_cm_set_cors_origins "$(clash_empty_config)" "")"
+
+it "лишние пробелы не создают пустых элементов"
+assert_jq '.["cors-allow-origins"] | length' "2" 	"$(clash_cm_set_cors_origins "$(clash_empty_config)" "  http://a   http://b  ")"
+
+it "повторный вызов заменяет список, а не дописывает"
+assert_jq '.["cors-allow-origins"] | join(",")' "http://b" 	"$(clash_cm_set_cors_origins "$(clash_cm_set_cors_origins "$(clash_empty_config)" "http://a")" "http://b")"
+
 finish

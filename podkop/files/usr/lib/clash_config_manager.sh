@@ -132,6 +132,33 @@ clash_cm_configure_clash_api() {
 }
 
 #######################################
+# Задать список источников, которым разрешён доступ к Clash API.
+#
+# У sing-box такой настройки нет вовсе. clash-rs же отказывается поднимать
+# API на нелокальном адресе, пока не заданы и секрет, и CORS - причём
+# отказывается молча для пользователя: в логе ошибка, а дашборд просто пуст.
+# Arguments:
+#   config: строка (JSON), конфигурация для изменения
+#   origins: строка, источники через пробел. Пустая строка убирает ключ.
+# Outputs:
+#   Пишет изменённую конфигурацию в stdout
+# Example:
+#   CONFIG=$(clash_cm_set_cors_origins "$CONFIG" "*")
+#######################################
+clash_cm_set_cors_origins() {
+    local config="$1"
+    local origins="$2"
+
+    echo "$config" | jq \
+        --arg origins "$origins" \
+        'if $origins == "" then
+            del(.["cors-allow-origins"])
+        else
+            .["cors-allow-origins"] = ($origins | split(" ") | map(select(length > 0)))
+        end'
+}
+
+#######################################
 # Настроить раздел profile. Заменяет experimental.cache_file у sing-box:
 # путь к хранилищу clash-rs выбирает сам, настраивается только что хранить.
 # Arguments:

@@ -1111,6 +1111,28 @@ _clash_determine_global_proxy_section() {
 # Clash API. У sing-box он жил в experimental.clash_api, у clash-rs это поля
 # верхнего уровня и штатная часть конфига.
 #######################################
+#######################################
+# Придумать секрет для Clash API.
+#
+# Берём из системного источника случайности, а не из $RANDOM: последний в ash
+# даёт 15 бит, то есть тридцать тысяч вариантов - перебрать такой секрет в
+# локальной сети дело секунд.
+# Outputs:
+#   строка шестнадцатеричных символов
+#######################################
+clash_generate_api_secret() {
+    local secret
+
+    secret=$(head -c 16 /dev/urandom 2> /dev/null | hexdump -v -e '/1 "%02x"' 2> /dev/null)
+
+    # hexdump есть не в каждой сборке busybox
+    [ -n "$secret" ] || secret=$(head -c 16 /dev/urandom 2> /dev/null | od -An -tx1 2> /dev/null | tr -d " \n")
+
+    # последний рубеж: uuid есть всегда, где есть /proc
+    [ -n "$secret" ] || secret=$(tr -d - < /proc/sys/kernel/random/uuid 2> /dev/null)
+
+    printf '%s' "$secret"
+}
 clash_configure_controller() {
     log "Configuring Clash API"
 
@@ -1140,10 +1162,41 @@ clash_configure_controller() {
     # Секрет ставится всегда, когда он задан, а не только вместе с YACD:
     # дашборд ходит в тот же API, и открытый API на адресе LAN - это чужая
     # возможность переключить выход.
+    # Если секрета нет, а адрес нелокальный - придумываем его сами.
+    #
+    # Проверено на живом clash-rs 0.10.8: он не поднимает API на нелокальном
+    # адресе без секрета вовсе и пишет об этом ошибкой:
+    #
+    #   API server is listening on a non-loopback address without a secret
+    #   API server failed to start
+    #
+    # sing-box такое разрешает, поэтому у апстрима вопроса не возникало. А без
+    # секрета на clash-rs молча отваливается весь дашборд подкопа: он ходит в
+    # тот же API.
+    #
+    # Придуманный секрет сохраняем в podkop.settings.yacd_secret_key, иначе о
+    # нём не узнает интерфейс и будет получать 401 вместо данных.
+    if [ -z "$yacd_secret_key" ] && [ "$controller_address" != "127.0.0.1" ]; then
+        yacd_secret_key="$(clash_generate_api_secret)"
+        uci set "podkop.settings.yacd_secret_key=$yacd_secret_key"
+        uci commit podkop
+        log "Clash API secret generated: clash-rs refuses a non-loopback API without one" "warn"
+    fi
+
     config=$(
         clash_cm_configure_clash_api "$config" \
             "$controller_address:$SB_CLASH_API_CONTROLLER_PORT" "$external_ui" "$yacd_secret_key"
     )
+
+    # CORS - второе требование clash-rs к нелокальному API, помимо секрета.
+    # Без него он тоже отказывается стартовать, и это выяснилось только на
+    # живом ядре: сначала он ругается на отсутствие секрета, а когда секрет
+    # появляется - на отсутствие CORS.
+    #
+    # Ставим "*", потому что настоящей защитой служит секрет: дашборд ходит с
+    # адреса роутера, но у пользователя это может быть и IP, и имя хоста, и
+    # любой из них через LuCI - перечислить все заранее нельзя.
+    config=$(clash_cm_set_cors_origins "$config" "*")
 }
 
 #######################################
