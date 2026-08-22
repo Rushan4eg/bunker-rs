@@ -26,6 +26,15 @@ sing-box можно выбрать второе ядро — [clash-rs](https://
 > защита слабее, чем у sing-box. Переводить боевой роутер на clash-rs там,
 > где VLESS уже прижимают, пока не стоит.
 
+Дыру чиним в апстриме, а не обходим у себя:
+
+- [Watfaq/rustls#11](https://github.com/Watfaq/rustls/pull/11) — механизм:
+  GREASE, произвольные расширения в ClientHello, свой список шифров.
+- [Watfaq/clash-rs#1503](https://github.com/Watfaq/clash-rs/pull/1503) —
+  разбор `client-fingerprint` и профиль Chrome 133 поверх этого механизма.
+
+Когда оба приедут, предупреждение выше можно будет снять.
+
 ## Зачем
 
 | | sing-box | clash-rs |
