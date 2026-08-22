@@ -26,14 +26,18 @@ sing-box можно выбрать второе ядро — [clash-rs](https://
 > защита слабее, чем у sing-box. Переводить боевой роутер на clash-rs там,
 > где VLESS уже прижимают, пока не стоит.
 
-Дыру чиним в апстриме, а не обходим у себя:
+**Дыра закрыта в наших форках.** Предупреждение выше описывает
+`clash-rs` из апстрима; сборка из
+[Rushan4eg/clash-rs](https://github.com/Rushan4eg/clash-rs/tree/feature/utls)
+поверх [Rushan4eg/rustls](https://github.com/Rushan4eg/rustls/tree/watfaq/utls)
+разбирает `client-fingerprint` и шлёт хелло Chrome 133.
 
-- [Watfaq/rustls#11](https://github.com/Watfaq/rustls/pull/11) — механизм:
-  GREASE, произвольные расширения в ClientHello, свой список шифров.
-- [Watfaq/clash-rs#1503](https://github.com/Watfaq/clash-rs/pull/1503) —
-  разбор `client-fingerprint` и профиль Chrome 133 поверх этого механизма.
-
-Когда оба приедут, предупреждение выше можно будет снять.
+Проверено на GL-XE300 через tcpdump на живом соединении к VLESS-серверу:
+пятнадцать шифров и шестнадцать расширений в порядке Chrome, JA4
+`t13d1516h2_8daaf6152771_…`. Не совпадает одно: в `ring` нет
+постквантовой группы X25519MLKEM768, поэтому список групп короче
+браузерного. На JA4 это не влияет - группы туда не входят, - но в JA3
+видно.
 
 ## Зачем
 
