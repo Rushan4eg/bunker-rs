@@ -33,6 +33,7 @@ check_required_file "$PODKOP_LIB/podkop_extras.sh"
 check_required_file "$PODKOP_LIB/core_installer.sh"
 check_required_file "$PODKOP_LIB/core_watchdog.sh"
 check_required_file "$PODKOP_LIB/clash_subscriptions.sh"
+check_required_file "$PODKOP_LIB/core_diagnostics.sh"
 . /lib/functions.sh
 . /lib/config/uci.sh
 . /lib/functions/network.sh
@@ -55,6 +56,7 @@ check_required_file "$PODKOP_LIB/clash_subscriptions.sh"
 . "$PODKOP_LIB/core_installer.sh"
 . "$PODKOP_LIB/core_watchdog.sh"
 . "$PODKOP_LIB/clash_subscriptions.sh"
+. "$PODKOP_LIB/core_diagnostics.sh"
 
 config_load "$PODKOP_CONFIG"
 
@@ -222,7 +224,7 @@ stop_main() {
         ip route flush table "$RT_TABLE_NAME"
     fi
 
-    log "Stop sing-box"
+    log "Stop $(core_current)"
     core_service_stop
 }
 
@@ -419,7 +421,7 @@ dnsmasq_configure() {
     backup_dnsmasq_config_option "noresolv" "podkop_noresolv"
     backup_dnsmasq_config_option "cachesize" "podkop_cachesize"
 
-    log "Configure dnsmasq for sing-box"
+    log "Configure dnsmasq for $(core_current)"
     uci_add_list "dhcp" "@dnsmasq[0]" "server" "$SB_DNS_INBOUND_ADDRESS"
     uci_set "dhcp" "@dnsmasq[0]" "noresolv" 1
     uci_set "dhcp" "@dnsmasq[0]" "cachesize" 0
@@ -1677,24 +1679,35 @@ nft_list_all_traffic_from_ip() {
 
 # Diagnotics
 check_proxy() {
-    local sing_box_config_path
-    config_get sing_box_config_path "settings" "config_path"
+    local core_name core_config
+    core_name="$(core_current)"
+    core_config="$(core_config_path)"
 
-    if ! command -v sing-box > /dev/null 2>&1; then
-        nolog "sing-box is not installed"
+    if ! core_is_installed; then
+        nolog "$core_name is not installed"
         return 1
     fi
 
-    if [ ! -f "$sing_box_config_path" ]; then
+    if [ ! -f "$core_config" ]; then
         nolog "Configuration file not found"
         return 1
     fi
 
-    nolog "Checking sing-box configuration..."
+    nolog "Checking $core_name configuration..."
 
-    if ! sing-box -c "$sing_box_config_path" check > /dev/null; then
+    if ! core_check_config "$core_config"; then
         nolog "Invalid configuration"
         return 1
+    fi
+
+    # Дальше проба идёт через `sing-box tools fetch`: она поднимает соединение
+    # самим ядром, минуя nft-правила. У clash-rs такой команды нет, а гнать
+    # curl мимо туннеля бессмысленно - он проверит не то. Поэтому честно
+    # говорим, что проба недоступна, вместо неверного результата.
+    if [ "$core_name" != "sing-box" ]; then
+        nolog "Configuration is valid"
+        nolog "Proxy connection probe is available only with the sing-box core"
+        return 0
     fi
 
     jq '
@@ -1829,7 +1842,7 @@ check_logs() {
     fi
 
     local logs
-    logs=$(logread | grep -E "podkop|sing-box")
+    logs=$(logread | grep -E "$(core_diag_log_pattern)")
 
     if [ -z "$logs" ]; then
         nolog "Logs not found"
@@ -1849,11 +1862,13 @@ check_logs() {
 }
 
 show_sing_box_config() {
-    local sing_box_config_path
-    config_get sing_box_config_path "settings" "config_path"
-    nolog "Current sing-box configuration:"
+    # Путь берём у слоя ядра, а не из настроек напрямую: у clash-rs конфиг
+    # свой, и config_path хранит путь для sing-box.
+    local core_config
+    core_config="$(core_config_path)"
+    nolog "Current $(core_current) configuration:"
 
-    if [ ! -f "$sing_box_config_path" ]; then
+    if [ ! -f "$core_config" ]; then
         nolog "Configuration file not found"
         return 1
     fi
@@ -1881,7 +1896,7 @@ show_sing_box_config() {
                 else . end
             )
         else . end
-    )' "$sing_box_config_path"
+    )' "$core_config"
 }
 
 show_config() {
@@ -1910,9 +1925,13 @@ show_version() {
 }
 
 show_sing_box_version() {
-    local version
-    version=$(sing-box version | head -n 1 | awk '{print $3}')
-    echo "$version"
+    core_version
+}
+
+check_sing_box_logs() {
+    # Команда была в диспетчере и в справке, а функции не было: вызов
+    # заканчивался "not found" и кодом 127.
+    core_diag_logs "$1"
 }
 
 show_system_info() {
@@ -1925,6 +1944,7 @@ show_system_info() {
 
 get_system_info() {
     local podkop_version podkop_latest_version luci_app_version sing_box_version openwrt_version device_model
+    local core_name core_ver
 
     podkop_version="$PODKOP_VERSION"
 
@@ -1944,6 +1964,13 @@ get_system_info() {
         sing_box_version="not installed"
     fi
 
+    # sing_box_version оставлен как есть - это версия именно sing-box, и на
+    # неё смотрит апстримный интерфейс. Активное ядро может быть другим,
+    # поэтому оно едет отдельными полями.
+    core_name="$(core_current)"
+    core_ver="$(core_version 2> /dev/null)"
+    [ -n "$core_ver" ] || core_ver="not installed"
+
     if [ -f /etc/os-release ]; then
         openwrt_version=$(grep OPENWRT_RELEASE /etc/os-release | cut -d'"' -f2)
         [ -z "$openwrt_version" ] && openwrt_version="unknown"
@@ -1958,31 +1985,43 @@ get_system_info() {
         device_model="unknown"
     fi
 
-    echo "{\"podkop_version\": \"$podkop_version\", \"podkop_latest_version\": \"$podkop_latest_version\", \"luci_app_version\": \"$luci_app_version\", \"sing_box_version\": \"$sing_box_version\", \"openwrt_version\": \"$openwrt_version\", \"device_model\": \"$device_model\"}" | jq .
+    jq -n \
+        --arg podkop_version "$podkop_version" \
+        --arg podkop_latest_version "$podkop_latest_version" \
+        --arg luci_app_version "$luci_app_version" \
+        --arg sing_box_version "$sing_box_version" \
+        --arg core "$core_name" \
+        --arg core_version "$core_ver" \
+        --arg openwrt_version "$openwrt_version" \
+        --arg device_model "$device_model" \
+        '{
+            podkop_version: $podkop_version,
+            podkop_latest_version: $podkop_latest_version,
+            luci_app_version: $luci_app_version,
+            sing_box_version: $sing_box_version,
+            core: $core,
+            core_version: $core_version,
+            openwrt_version: $openwrt_version,
+            device_model: $device_model
+        }'
 }
 
 get_sing_box_status() {
     local running=0
     local enabled=0
     local status=""
-    local version=""
     local dns_configured=0
+    local name
 
-    # Check if service is enabled
-    if [ -x /etc/rc.d/S99sing-box ]; then
-        enabled=1
-    fi
+    name="$(core_current)"
 
-    # Check if service is running
-    if pgrep -f "sing-box" > /dev/null; then
-        running=1
-        version=$(sing-box version | head -n 1 | awk '{print $3}')
-    fi
+    core_service_is_enabled && enabled=1
+    pgrep -f "$(core_binary)" > /dev/null 2>&1 && running=1
 
     # Check DNS configuration
     local dns_server
     dns_server=$(uci get dhcp.@dnsmasq[0].server 2> /dev/null)
-    if [ "$dns_server" = "127.0.0.42" ]; then
+    if [ "$dns_server" = "$SB_DNS_INBOUND_ADDRESS" ]; then
         dns_configured=1
     fi
 
@@ -2001,7 +2040,13 @@ get_sing_box_status() {
         fi
     fi
 
-    echo "{\"running\":$running,\"enabled\":$enabled,\"status\":\"$status\",\"dns_configured\":$dns_configured}"
+    jq -n \
+        --arg core "$name" \
+        --arg status "$status" \
+        --argjson running "$running" \
+        --argjson enabled "$enabled" \
+        --argjson dns_configured "$dns_configured" \
+        '{core: $core, running: $running, enabled: $enabled, status: $status, dns_configured: $dns_configured}'
 }
 
 get_status() {
@@ -2192,70 +2237,10 @@ check_nft_rules() {
 }
 
 check_sing_box() {
-    local sing_box_installed=0
-    local sing_box_version_ok=0
-    local sing_box_service_exist=0
-    local sing_box_autostart_disabled=0
-    local sing_box_process_running=0
-    local sing_box_ports_listening=0
-
-    # Check if sing-box is installed
-    if command -v sing-box > /dev/null 2>&1; then
-        sing_box_installed=1
-
-        # Check version (must be >= 1.12.4)
-        local version
-        version=$(sing-box version 2> /dev/null | head -n 1 | awk '{print $3}')
-        if [ -n "$version" ]; then
-            version=$(echo "$version" | sed 's/^v//')
-            local major
-            local minor
-            local patch
-            major=$(echo "$version" | cut -d. -f1)
-            minor=$(echo "$version" | cut -d. -f2)
-            patch=$(echo "$version" | cut -d. -f3)
-
-            # Compare version: must be >= 1.12.4
-            if [ "$major" -gt 1 ] ||
-                [ "$major" -eq 1 ] && [ "$minor" -gt 12 ] ||
-                [ "$major" -eq 1 ] && [ "$minor" -eq 12 ] && [ "$patch" -ge 4 ]; then
-                sing_box_version_ok=1
-            fi
-        fi
-    fi
-
-    # Check if service exists
-    if [ -f /etc/init.d/sing-box ]; then
-        sing_box_service_exist=1
-
-        if ! /etc/init.d/sing-box enabled 2> /dev/null; then
-            sing_box_autostart_disabled=1
-        fi
-    fi
-
-    # Check if process is running
-    if pgrep "sing-box" > /dev/null 2>&1; then
-        sing_box_process_running=1
-    fi
-
-    # Check if sing-box is listening on required ports
-    local port_53_ok=0
-    local port_1602_ok=0
-
-    if netstat -ln 2> /dev/null | grep -q "127.0.0.42:53"; then
-        port_53_ok=1
-    fi
-
-    if netstat -ln 2> /dev/null | grep -q "127.0.0.1:1602"; then
-        port_1602_ok=1
-    fi
-
-    # Both ports must be listening
-    if [ "$port_53_ok" = "1" ] && [ "$port_1602_ok" = "1" ]; then
-        sing_box_ports_listening=1
-    fi
-
-    echo "{\"sing_box_installed\":$sing_box_installed,\"sing_box_version_ok\":$sing_box_version_ok,\"sing_box_service_exist\":$sing_box_service_exist,\"sing_box_autostart_disabled\":$sing_box_autostart_disabled,\"sing_box_process_running\":$sing_box_process_running,\"sing_box_ports_listening\":$sing_box_ports_listening}" | jq .
+    # Шесть проверок из времён единственного ядра. Теперь их делает
+    # core_diagnostics поверх слоя core_*, а имена ключей в ответе остались
+    # прежними - их читает панель диагностики в main.js.
+    core_diag_collect
 }
 
 check_fakeip() {
@@ -2394,6 +2379,15 @@ print_global() {
     echo "$message"
 }
 
+# Галочка или крест перед строкой отчёта.
+print_check() {
+    if [ "$1" -eq 1 ]; then
+        print_global "✅ $2"
+    else
+        print_global "❌ $2"
+    fi
+}
+
 global_check() {
     local PODKOP_LUCI_VERSION="Unknown"
     [ -n "$1" ] && PODKOP_LUCI_VERSION="$1"
@@ -2407,16 +2401,20 @@ global_check() {
 
     if [ -n "$system_info_json" ]; then
         local podkop_version podkop_latest_version luci_app_version sing_box_version openwrt_version device_model
+        local core_name core_ver
 
         podkop_version=$(echo "$system_info_json" | jq -r '.podkop_version // "unknown"')
         podkop_latest_version=$(echo "$system_info_json" | jq -r '.podkop_latest_version // "unknown"')
         luci_app_version=$(echo "$system_info_json" | jq -r '.luci_app_version // "unknown"')
         sing_box_version=$(echo "$system_info_json" | jq -r '.sing_box_version // "unknown"')
+        core_name=$(echo "$system_info_json" | jq -r '.core // "sing-box"')
+        core_ver=$(echo "$system_info_json" | jq -r '.core_version // "unknown"')
         openwrt_version=$(echo "$system_info_json" | jq -r '.openwrt_version // "unknown"')
         device_model=$(echo "$system_info_json" | jq -r '.device_model // "unknown"')
 
         print_global "🕳️ Podkop:        $podkop_version (latest: $podkop_latest_version)"
         print_global "🕳️ LuCI App:      $luci_app_version"
+        print_global "📦 Core:          $core_name $core_ver"
         print_global "📦 Sing-box:      $sing_box_version"
         print_global "🛜 OpenWrt:       $openwrt_version"
         print_global "🛜 Device:        $device_model"
@@ -2482,14 +2480,18 @@ global_check() {
     fi
 
     print_global "━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    print_global "📦 Sing-box status"
+    print_global "📦 Core status"
 
     local singbox_check_json
     singbox_check_json=$(check_sing_box)
 
     if [ -n "$singbox_check_json" ]; then
+        local core_name core_min
         local sing_box_installed sing_box_version_ok sing_box_service_exist sing_box_autostart_disabled sing_box_process_running sing_box_ports_listening
 
+        # Ключи в ответе исторические, содержимое - про активное ядро.
+        core_name=$(echo "$singbox_check_json" | jq -r '.core // "sing-box"')
+        core_min=$(echo "$singbox_check_json" | jq -r '.core_min_version // "?"')
         sing_box_installed=$(echo "$singbox_check_json" | jq -r '.sing_box_installed // 0')
         sing_box_version_ok=$(echo "$singbox_check_json" | jq -r '.sing_box_version_ok // 0')
         sing_box_service_exist=$(echo "$singbox_check_json" | jq -r '.sing_box_service_exist // 0')
@@ -2497,43 +2499,14 @@ global_check() {
         sing_box_process_running=$(echo "$singbox_check_json" | jq -r '.sing_box_process_running // 0')
         sing_box_ports_listening=$(echo "$singbox_check_json" | jq -r '.sing_box_ports_listening // 0')
 
-        if [ "$sing_box_installed" -eq 1 ]; then
-            print_global "✅ Sing-box installed"
-        else
-            print_global "❌ Sing-box installed"
-        fi
-
-        if [ "$sing_box_version_ok" -eq 1 ]; then
-            print_global "✅ Sing-box version is compatible (newer than 1.12.4)"
-        else
-            print_global "❌ Sing-box version is not compatible (older than 1.12.4)"
-        fi
-
-        if [ "$sing_box_service_exist" -eq 1 ]; then
-            print_global "✅ Sing-box service exist"
-        else
-            print_global "❌ Sing-box service exist"
-        fi
-
-        if [ "$sing_box_autostart_disabled" -eq 1 ]; then
-            print_global "✅ Sing-box autostart disabled"
-        else
-            print_global "❌ Sing-box autostart disabled"
-        fi
-
-        if [ "$sing_box_process_running" -eq 1 ]; then
-            print_global "✅ Sing-box process running"
-        else
-            print_global "❌ Sing-box process running"
-        fi
-
-        if [ "$sing_box_ports_listening" -eq 1 ]; then
-            print_global "✅ Sing-box listening ports"
-        else
-            print_global "❌ Sing-box listening ports"
-        fi
+        print_check "$sing_box_installed" "$core_name installed"
+        print_check "$sing_box_version_ok" "$core_name version is compatible (>= $core_min)"
+        print_check "$sing_box_service_exist" "$core_name service exist"
+        print_check "$sing_box_autostart_disabled" "$core_name autostart disabled"
+        print_check "$sing_box_process_running" "$core_name process running"
+        print_check "$sing_box_ports_listening" "$core_name listening ports"
     else
-        print_global "❌ Failed to get sing-box info"
+        print_global "❌ Failed to get core info"
     fi
 
     print_global "━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -2694,9 +2667,9 @@ global_check() {
         fakeip_status=$(echo "$fakeip_check_json" | jq -r '.fakeip // false')
 
         if [ "$fakeip_status" = "true" ]; then
-            print_global "✅ Router DNS is routed through sing-box"
+            print_global "✅ Router DNS is routed through $(core_current)"
         else
-            print_global "⚠️ Router DNS is NOT routed through sing-box"
+            print_global "⚠️ Router DNS is NOT routed through $(core_current)"
         fi
     else
         print_global "❌ Failed to get FakeIP info"
@@ -2731,18 +2704,18 @@ Available commands:
     check_proxy             Check proxy connectivity
     check_nft               Check NFT rules
     check_nft_rules         Check NFT rules status
-    check_sing_box          Check sing-box installation and status
+    check_sing_box          Check the active core installation and status
     check_logs              Show podkop logs from system journal
-    check_sing_box_logs     Show sing-box logs
+    check_sing_box_logs     Show logs of the active core
     check_fakeip            Test FakeIP on router
     clash_api               Clash API interface for managing proxies and groups
     show_config             Display current podkop configuration
     show_version            Show podkop version
-    show_sing_box_config    Show sing-box configuration
-    show_sing_box_version   Show sing-box version
+    show_sing_box_config    Show the active core configuration
+    show_sing_box_version   Show the active core version
     show_system_info        Show system information
     get_status              Get podkop service status
-    get_sing_box_status     Get sing-box service status
+    get_sing_box_status     Get the active core service status
     get_system_info         Get system information in JSON format
     check_dns_available     Check DNS server availability
     global_check            Run global system check
@@ -2784,7 +2757,7 @@ check_logs)
     check_logs
     ;;
 check_sing_box_logs)
-    check_sing_box_logs
+    check_sing_box_logs "$2"
     ;;
 check_fakeip)
     check_fakeip
