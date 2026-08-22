@@ -2,9 +2,9 @@
 # Проверка сборки целиком.
 #
 # Модули покрыты каждый своими тестами, но там они поднимаются поодиночке и с
-# заглушками вместо соседей. Здесь проверяется другое: что все двенадцать
-# файлов грузятся ВМЕСТЕ и в том же порядке, что в /usr/bin/podkop, никто не
-# перетирает чужую функцию и не падает при сорсинге.
+# заглушками вместо соседей. Здесь проверяется другое: что все файлы грузятся
+# ВМЕСТЕ и в том же порядке, что в /usr/bin/podkop, никто не перетирает чужую
+# функцию и не падает при сорсинге.
 #
 # Такую поломку не поймает ни один модульный тест, а проявится она только на
 # роутере при старте сервиса - то есть в худшем месте.
@@ -61,12 +61,13 @@ jq() { "$JQ" "$@"; }
 . "$PODKOP_LIB/core_installer.sh"
 . "$PODKOP_LIB/core_watchdog.sh"
 . "$PODKOP_LIB/clash_subscriptions.sh"
+. "$PODKOP_LIB/core_diagnostics.sh"
 
 have() { command -v "$1" >/dev/null 2>&1 && echo да || echo нет; }
 
 # ============================ модули поднялись ==============================
 
-it "все двенадцать модулей грузятся вместе без падения"
+it "все модули грузятся вместе без падения"
 assert_eq "да" "да" # дошли сюда - значит ни один сорсинг не оборвал скрипт
 
 it "слой ядра на месте"
@@ -122,7 +123,7 @@ it "podkop подключает все новые модули"
 missing=""
 for m in core.sh clash_config_manager.sh clash_config_facade.sh \
 	clash_rulesets.sh ruleset_dispatch.sh clash_config_builder.sh podkop_extras.sh \
-	core_installer.sh core_watchdog.sh clash_subscriptions.sh; do
+	core_installer.sh core_watchdog.sh clash_subscriptions.sh core_diagnostics.sh; do
 	grep -q "PODKOP_LIB/$m" "$SRC" || missing="$missing $m"
 done
 assert_eq "" "$missing"
@@ -131,7 +132,7 @@ it "podkop проверяет наличие каждого модуля пер�
 missing=""
 for m in core.sh clash_config_manager.sh clash_config_facade.sh \
 	clash_rulesets.sh ruleset_dispatch.sh clash_config_builder.sh podkop_extras.sh \
-	core_installer.sh core_watchdog.sh clash_subscriptions.sh; do
+	core_installer.sh core_watchdog.sh clash_subscriptions.sh core_diagnostics.sh; do
 	grep -q "check_required_file \"\$PODKOP_LIB/$m\"" "$SRC" || missing="$missing $m"
 done
 assert_eq "" "$missing"
@@ -243,6 +244,9 @@ assert_eq "да" "$(have core_watchdog_tick)"
 
 it "подписки подключены"
 assert_eq "да" "$(have clash_sub_configure_section)"
+
+it "диагностика ядра подключена"
+assert_eq "да" "$(have core_diag_collect)"
 
 # Без этой ветки сторож получил бы от подкопа справку и код 1, то есть сделал
 # бы только рестарт ядра - ровно без того, ради чего он написан.

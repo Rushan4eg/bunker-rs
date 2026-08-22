@@ -1148,6 +1148,8 @@ var initialDiagnosticStore = {
     podkop_latest_version: "loading",
     luci_app_version: "loading",
     sing_box_version: "loading",
+    core: "loading",
+    core_version: "loading",
     openwrt_version: "loading",
     device_model: "loading"
   },
@@ -2621,44 +2623,46 @@ async function runSingBoxCheck() {
     throw new Error("Sing-box checks failed");
   }
   const data = singBoxChecks.data;
+  const coreName = data.core || "sing-box";
+  const coreMin = data.core_min_version ? ` (>= ${data.core_min_version})` : "";
   const allGood = Boolean(data.sing_box_installed) && Boolean(data.sing_box_version_ok) && Boolean(data.sing_box_service_exist) && Boolean(data.sing_box_autostart_disabled) && Boolean(data.sing_box_process_running) && Boolean(data.sing_box_ports_listening);
   const atLeastOneGood = Boolean(data.sing_box_installed) || Boolean(data.sing_box_version_ok) || Boolean(data.sing_box_service_exist) || Boolean(data.sing_box_autostart_disabled) || Boolean(data.sing_box_process_running) || Boolean(data.sing_box_ports_listening);
   const { state, description } = getMeta({ atLeastOneGood, allGood });
   updateCheckStore({
     order,
     code,
-    title,
+    title: getCheckTitle(coreName),
     description,
     state,
     items: [
       {
         state: data.sing_box_installed ? "success" : "error",
-        key: _("Sing-box installed"),
-        value: ""
+        key: `${coreName} ${_("installed")}`,
+        value: data.core_version || ""
       },
       {
         state: data.sing_box_version_ok ? "success" : "error",
-        key: _("Sing-box version is compatible (newer than 1.12.4)"),
+        key: `${coreName} ${_("version is compatible")}${coreMin}`,
         value: ""
       },
       {
         state: data.sing_box_service_exist ? "success" : "error",
-        key: _("Sing-box service exist"),
+        key: `${coreName} ${_("service exist")}`,
         value: ""
       },
       {
         state: data.sing_box_autostart_disabled ? "success" : "error",
-        key: _("Sing-box autostart disabled"),
+        key: `${coreName} ${_("autostart disabled")}`,
         value: ""
       },
       {
         state: data.sing_box_process_running ? "success" : "error",
-        key: _("Sing-box process running"),
+        key: `${coreName} ${_("process running")}`,
         value: ""
       },
       {
         state: data.sing_box_ports_listening ? "success" : "error",
-        key: _("Sing-box listening ports"),
+        key: `${coreName} ${_("listening ports")}`,
         value: ""
       }
     ]
@@ -3991,6 +3995,8 @@ async function fetchSystemInfo() {
         podkop_latest_version: _("unknown"),
         luci_app_version: _("unknown"),
         sing_box_version: _("unknown"),
+        core: _("unknown"),
+        core_version: _("unknown"),
         openwrt_version: _("unknown"),
         device_model: _("unknown")
       }
@@ -4326,6 +4332,10 @@ function renderDiagnosticSystemInfoWidget() {
       {
         key: "Luci App",
         value: normalizeCompiledVersion(PODKOP_LUCI_APP_VERSION)
+      },
+      {
+        key: _("Core"),
+        value: `${diagnosticsSystemInfo.core || "sing-box"} ${diagnosticsSystemInfo.core_version || ""}`.trim()
       },
       {
         key: "Sing-box",
